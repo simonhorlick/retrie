@@ -38,6 +38,9 @@ module Retrie.Expr
 
 import Control.Monad
 import Control.Monad.State.Lazy
+#if __GLASGOW_HASKELL__ >= 914
+import qualified Data.List.NonEmpty as NE
+#endif
 
 import Retrie.ExactPrint
 import Retrie.Fixity
@@ -163,9 +166,15 @@ mkLams (p:ps) e = do
     vs' = setEntryDP p (SameLine 1) : ps
     
     L l (Match _ ctxt pats (GRHSs cs grhs binds)) = mkMatch (LamAlt LamSingle) (L (EpaSpan noSrcSpan) vs') e emptyLocalBinds
+#if __GLASGOW_HASKELL__ >= 914
+    grhs' = case grhs of
+      (L lg (GRHS _ guards rhs) NE.:| []) -> L lg (GRHS anGrhs guards rhs) NE.:| []
+      _ -> error "mkLams: lambda expression can only have a single grhs!"
+#else
     grhs' = case grhs of
       [L lg (GRHS _ guards rhs)] -> [L lg (GRHS anGrhs guards rhs)]
       _ -> fail "mkLams: lambda expression can only have a single grhs!"
+#endif
   matches <- mkLocA (SameLine 0) [L l (Match noExtField ctxt pats (GRHSs cs grhs' binds))]
   let
     mg = mkMatchGroup (Generated OtherExpansion SkipPmc) matches
@@ -404,8 +413,12 @@ conPatHelper con (InfixCon x y) =
                          <*> patToExpr x
                          <*> lift (mkLocatedHsVar con)
                          <*> patToExpr y
+#if __GLASGOW_HASKELL__ >= 914
+conPatHelper con (PrefixCon xs) = do
+#else
 -- TODO(xich): Properly handle tyargs here!
 conPatHelper con (PrefixCon _tyargs xs) = do
+#endif
   f <- lift $ mkLocatedHsVar con
   as <- mapM patToExpr xs
   -- lift $ lift $ liftIO $ debugPrint Loud "conPatHelper:f="  [showAst f]
@@ -545,7 +558,11 @@ parenifyP Context{..} p@(L _ pat)
     needed TuplePat{}                         = False
     needed VarPat{}                           = False
     needed WildPat{}                          = False
+#if __GLASGOW_HASKELL__ >= 914
+    needed (ConPat _ _ (PrefixCon []))        = False
+#else
     needed (ConPat _ _ (PrefixCon _ []))      = False
+#endif
     needed _                                  = True
 
 parenifyT
@@ -592,6 +609,20 @@ unparenP p = p
 
 --------------------------------------------------------------------
 
+#if __GLASGOW_HASKELL__ >= 914
+bitraverseHsConDetails
+  :: Applicative m
+  => (arg -> m arg')
+  -> (rec -> m rec')
+  -> HsConDetails arg rec
+  -> m (HsConDetails arg' rec')
+bitraverseHsConDetails argf _ (PrefixCon args) =
+  PrefixCon <$> (argf `traverse` args)
+bitraverseHsConDetails _ recf (RecCon r) =
+  RecCon <$> recf r
+bitraverseHsConDetails argf _ (InfixCon a1 a2) =
+  InfixCon <$> argf a1 <*> argf a2
+#else
 bitraverseHsConDetails
   :: Applicative m
   => ([tyarg] -> m [tyarg'])
@@ -605,3 +636,4 @@ bitraverseHsConDetails _ _ recf (RecCon r) =
   RecCon <$> recf r
 bitraverseHsConDetails _ argf _ (InfixCon a1 a2) =
   InfixCon <$> argf a1 <*> argf a2
+#endif
