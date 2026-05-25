@@ -20,6 +20,7 @@ import Control.Monad.Writer.Strict
 import Data.Char (isSpace)
 import Data.Generics
 
+import Retrie.ContextCapture
 import Retrie.ExactPrint
 import Retrie.Expr
 import Retrie.FreeVars
@@ -76,27 +77,44 @@ replaceImpl c e = do
 
   case match of
     NoMatch -> return e
-    MatchResult sub Template{..} -> do
+    -- Free variables of the template must not be captured by binders
+    -- enclosing the match site (same occurrence string resolving to a
+    -- different Name). When they would be, refuse the match and leave
+    -- the call site untouched -- a refused site is visible to callers
+    -- only as the absence of a 'Replacement' for it. Repairing the
+    -- capture by alpha-renaming the enclosing binder throughout its
+    -- scope is possible -- see the @capture-rename@ branches -- but
+    -- soaking real codebases showed fewer than 0.5% of sites capture,
+    -- which does not pay for that machinery. See
+    -- "Retrie.ContextCapture".
+    MatchResult sub Template{..} -> case detectContextCaptures c sub (astA tTemplate) of
+     [] -> do
       -- graft template into target module
       t' <- graftA tTemplate
       -- substitute for quantifiers in grafted template
       r <- normalizeHangingLets . normalizeHangingComprehensions
              <$> subst sub c t'
+      -- add parens to template if needed. Done before 'addAllAnnsT' so
+      -- the printed replacement text below comes from a node whose
+      -- trailing 'AnnListItem' is the template's own (empty) -- not
+      -- 'e''s. If we transferred 'e''s annotations first, exact-print
+      -- would emit the call site's list/tuple/do separator at the end
+      -- of the replacement text, duplicating the separator already
+      -- present in the surrounding source.
+      resForPrint <- (mkM (parenify c) `extM` parenifyT c `extM` parenifyP c) r
       -- copy appropriate annotations from old expression to template
-      r0 <- addAllAnnsT e r
-      -- add parens to template if needed
-      res <- (mkM (parenify c) `extM` parenifyT c `extM` parenifyP c) r0
+      -- for the in-AST splice. Carrying 'e''s 'AnnListItem' is correct
+      -- here: 'res' replaces 'e' in the parent tree, and a list element
+      -- still needs its trailing comma to print the surrounding list.
+      res <- addAllAnnsT e resForPrint
 
       -- prune the resulting expression and log it with location
       orig <- printNoLeadingSpaces <$> pruneA e
 
-      -- Zero the entry delta before printing: the replacement text is
-      -- spliced at the match site's start column, so its first line must
-      -- start at column one. Printing the entry whitespace and stripping
-      -- it afterwards (printNoLeadingSpaces) would shift the first line
-      -- left while later lines keep their columns, skewing a multi-line
-      -- replacement's internal layout by the amount stripped.
-      repl <- printNoLeadingSpaces <$> pruneA (setEntryDP res (SameLine 0))
+      -- Output a replacement without indentation. It is the consumers
+      -- responsibility to indent subsequent lines relative to the splice
+      -- point column.
+      repl <- printNoLeadingSpaces <$> pruneA (setEntryDP resForPrint (SameLine 0))
       -- repl <- printA' <$> pruneA r
       -- repl <- printA' <$> pruneA res
       -- repl <- return $ showAst t'
@@ -110,10 +128,16 @@ replaceImpl c e = do
       -- lift $ liftIO $ debugPrint Loud "replaceImpl:t'=" [showAst t']
       -- lift $ liftIO $ debugPrint Loud "replaceImpl:res=" [showAst res]
 
-      let replacement = Replacement (getLocA e) orig repl
+      let replacement = Replacement
+            { replLocation = getLocA e
+            , replOriginal = orig
+            , replReplacement = repl
+            }
       TransformT $ lift $ tell $ Change [replacement] [tImports]
       -- make the actual replacement
       return res
+
+     _capturing -> return e
 
 -- | Re-lay every \"hanging\" let in the grafted expression: one whose
 -- bindings sit left of the @let@ keyword, so their column deltas are
@@ -158,7 +182,7 @@ normalizeHangingLets = everywhere (mkT fixLet)
 --
 -- Brackets suspend GHC layout, so a parsed comprehension may carry
 -- continuation lines left of its own first token -- the layout anchor
--- exact-print resolves their 'DifferentLine' columns against:
+-- exact-print resolves 'DifferentLine' columns against:
 --
 -- > gen = [ mk n s
 -- >     | n <- ns
@@ -203,8 +227,7 @@ data Change = NoChange | Change [Replacement] [AnnotatedImports]
 instance Semigroup Change where
   NoChange         <> other            = other
   other            <> NoChange         = other
-  (Change rs1 is1) <> (Change rs2 is2) =
-    Change (rs1 <> rs2) (is1 <> is2)
+  (Change rs1 is1) <> (Change rs2 is2) = Change (rs1 <> rs2) (is1 <> is2)
 
 instance Monoid Change where
   mempty = NoChange

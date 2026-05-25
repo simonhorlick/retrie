@@ -18,6 +18,7 @@ import Retrie.AlphaEnv
 import qualified Retrie.GHC as GHC
 import Retrie.PatternMap.Class
 import Retrie.Quantifiers
+import Retrie.RenameInfo (NameMap)
 import Retrie.Substitution
 
 data BoolMap a
@@ -43,11 +44,11 @@ instance PatternMap BoolMap where
     }
 
   mAlter
-    :: AlphaEnv -> Quantifiers -> Key BoolMap -> A a -> BoolMap a -> BoolMap a
-  mAlter env qs b f EmptyBoolMap = mAlter env qs b f (BoolMap mEmpty mEmpty)
-  mAlter env qs b f m@BoolMap{}
-    | b = m { bmTrue = mAlter env qs () f (bmTrue m) }
-    | otherwise = m { bmFalse = mAlter env qs () f (bmFalse m) }
+    :: NameMap -> AlphaEnv -> Quantifiers -> Key BoolMap -> A a -> BoolMap a -> BoolMap a
+  mAlter nm env qs b f EmptyBoolMap = mAlter nm env qs b f (BoolMap mEmpty mEmpty)
+  mAlter nm env qs b f m@BoolMap{}
+    | b = m { bmTrue = mAlter nm env qs () f (bmTrue m) }
+    | otherwise = m { bmFalse = mAlter nm env qs () f (bmFalse m) }
 
   mMatch
     :: MatchEnv
@@ -73,8 +74,8 @@ instance PatternMap IntMap where
   mUnion :: IntMap a -> IntMap a -> IntMap a
   mUnion (IntMap m1) (IntMap m2) = IntMap $ I.unionWith (++) m1 m2
 
-  mAlter :: AlphaEnv -> Quantifiers -> Key IntMap -> A a -> IntMap a -> IntMap a
-  mAlter _ _ i f (IntMap m) = IntMap $ I.alter (toAList f) i m
+  mAlter :: NameMap -> AlphaEnv -> Quantifiers -> Key IntMap -> A a -> IntMap a -> IntMap a
+  mAlter _ _ _ i f (IntMap m) = IntMap $ I.alter (toAList f) i m
 
   mMatch
     :: MatchEnv
@@ -100,8 +101,8 @@ instance Ord k => PatternMap (Map k) where
   mUnion :: Map k a -> Map k a -> Map k a
   mUnion (Map m1) (Map m2) = Map $ M.unionWith (++) m1 m2
 
-  mAlter :: AlphaEnv -> Quantifiers -> Key (Map k) -> A a -> Map k a -> Map k a
-  mAlter _ _ k f (Map m) = Map $ M.alter (toAList f) k m
+  mAlter :: NameMap -> AlphaEnv -> Quantifiers -> Key (Map k) -> A a -> Map k a -> Map k a
+  mAlter _ _ _ k f (Map m) = Map $ M.alter (toAList f) k m
 
   mMatch
     :: MatchEnv
@@ -133,8 +134,8 @@ instance PatternMap FSEnv where
   mUnion :: FSEnv a -> FSEnv a -> FSEnv a
   mUnion (FSEnv m1) (FSEnv m2) = FSEnv (mUnion m1 m2)
 
-  mAlter :: AlphaEnv -> Quantifiers -> Key FSEnv -> A a -> FSEnv a -> FSEnv a
-  mAlter env qs fs f (FSEnv m) = FSEnv (mAlter env qs (GHC.getUnique fs) f m)
+  mAlter :: NameMap -> AlphaEnv -> Quantifiers -> Key FSEnv -> A a -> FSEnv a -> FSEnv a
+  mAlter nm env qs fs f (FSEnv m) = FSEnv (mAlter nm env qs (GHC.getUnique fs) f m)
 
   mMatch :: MatchEnv -> Key FSEnv -> (Substitution, FSEnv a) -> [(Substitution, a)]
   mMatch env fs (hs, FSEnv m) = mMatch env (GHC.getUnique fs) (hs, m)
@@ -153,8 +154,8 @@ instance PatternMap UniqFM where
   mUnion :: UniqFM a -> UniqFM a -> UniqFM a
   mUnion (UniqFM m1) (UniqFM m2) = UniqFM $ GHC.plusUFM_C (++) m1 m2
 
-  mAlter :: AlphaEnv -> Quantifiers -> Key UniqFM -> A a -> UniqFM a -> UniqFM a
-  mAlter _ _ k f (UniqFM m) = UniqFM $ GHC.alterUFM (toAList f) m k
+  mAlter :: NameMap -> AlphaEnv -> Quantifiers -> Key UniqFM -> A a -> UniqFM a -> UniqFM a
+  mAlter _ _ _ k f (UniqFM m) = UniqFM $ GHC.alterUFM (toAList f) m k
 
   mMatch
     :: MatchEnv

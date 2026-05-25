@@ -14,16 +14,23 @@ module Retrie.Monad
     Retrie
   , addImports
   , apply
+  , applyWithConfig
+  , applyWithRenameInfo
   , applyWithStrategy
   , applyWithUpdate
   , applyWithUpdateAndStrategy
+  , ApplyConfig(..)
+  , defaultApplyConfig
   , focus
   , ifChanged
   , iterateR
   , query
+  , queryWithConfig
+  , queryWithRenameInfo
   , queryWithUpdate
   , topDownPrune
     -- * Internal
+  , changeReplacements
   , getGroundTerms
   , liftRWST
   , runRetrie
@@ -36,12 +43,14 @@ import Control.Monad.RWS
 import Control.Monad.Writer.Strict
 import Data.Foldable
 
+import Retrie.AlphaEnv
 import Retrie.Context
 import Retrie.CPP
 import Retrie.ExactPrint
 import Retrie.Fixity
 import Retrie.GroundTerms
 import Retrie.Query
+import Retrie.RenameInfo
 import Retrie.Replace
 import Retrie.Substitution
 import Retrie.SYB
@@ -141,6 +150,11 @@ runRetrie
   -> IO (a, CPP AnnotatedModule, Change)
 runRetrie fixities retrie = runRWST (getComp retrie) fixities
 
+-- | The 'Replacement's carried by a 'Change'.
+changeReplacements :: Change -> [Replacement]
+changeReplacements NoChange         = []
+changeReplacements (Change repls _) = repls
+
 -- | Helper to extract the ground terms from a 'Retrie' computation.
 getGroundTerms :: Retrie a -> [GroundTerms]
 getGroundTerms = eval . view
@@ -183,22 +197,77 @@ focus :: Data k => [Query k v] -> Retrie ()
 focus [] = return ()
 focus qs = singleton $ Focus $ map groundTerms qs
 
+-- | Options for 'applyWithConfig' and 'queryWithConfig'. Build one by
+-- record-updating 'defaultApplyConfig', so adding a new option is not
+-- a breaking change for callers.
+data ApplyConfig = ApplyConfig
+  { acContextUpdater :: ContextUpdater
+    -- ^ Context update function. Default: 'updateContext'.
+  , acStrategy :: Strategy (TransformT (WriterT Change IO))
+    -- ^ Traversal strategy. Default: 'topDownPrune'. Not used by
+    -- queries, which always traverse everything.
+  , acRenameInfo :: RenameInfo
+    -- ^ Renamer side-table; see 'applyWithRenameInfo'.
+    -- Default: 'emptyRenameInfo'.
+  }
+
+defaultApplyConfig :: ApplyConfig
+defaultApplyConfig = ApplyConfig
+  { acContextUpdater = updateContext
+  , acStrategy = topDownPrune
+  , acRenameInfo = emptyRenameInfo
+  }
+
 -- | Apply a set of rewrites. By default, rewrites are applied top-down,
 -- pruning the traversal at successfully changed AST nodes. See 'topDownPrune'.
 apply :: [Rewrite Universe] -> Retrie ()
-apply = applyWithUpdateAndStrategy updateContext topDownPrune
+apply = applyWithConfig defaultApplyConfig
+
+-- | Apply a set of rewrites with a user-supplied 'RenameInfo'.
+--
+-- Use this when you have access to a 'RenamedSource' (e.g. via HLS or
+-- a custom GHC session) and want retrie to correctly handle binders
+-- introduced by @RecordWildCards@ or @NamedFieldPuns@.
+--
+-- __The 'RenameInfo' must cover every module whose source contributes
+-- to the rewriting.__ This means:
+--
+--   * each /target/ module retrie traverses to apply rewrites, and
+--   * each /defining/ module whose function definition is being
+--     unfolded or folded via @--unfold@ or @--fold@ (the rewrite's
+--     template body retains the defining module's source spans).
+--
+-- Build a 'RenameInfo' per module with 'mkRenameInfo' and combine them
+-- with @('<>')@ (or 'mconcat'). A single 'RenameInfo' value safely
+-- carries entries for arbitrarily many modules because 'RealSrcSpan'
+-- keys are filename-qualified.
+--
+-- Template variables whose source spans the 'RenameInfo' covers are
+-- matched by renamer-resolved 'Name', so qualified, unqualified, and
+-- aliased references to the same definition unify; variables outside
+-- its coverage match textually, as with 'apply'.
+--
+-- If a module's 'RenameInfo' is missing, retrie silently falls back to
+-- parser-pass binder collection for that module's nodes, which cannot
+-- see wildcard-introduced binders — the original capture bug
+-- reappears for that module only.
+applyWithRenameInfo :: RenameInfo -> [Rewrite Universe] -> Retrie ()
+applyWithRenameInfo ri =
+  applyWithConfig defaultApplyConfig { acRenameInfo = ri }
 
 -- | Apply a set of rewrites with a custom context-update function.
 applyWithUpdate
   :: ContextUpdater -> [Rewrite Universe] -> Retrie ()
-applyWithUpdate updCtxt = applyWithUpdateAndStrategy updCtxt topDownPrune
+applyWithUpdate updCtxt =
+  applyWithConfig defaultApplyConfig { acContextUpdater = updCtxt }
 
 -- | Apply a set of rewrites with a custom traversal strategy.
 applyWithStrategy
   :: Strategy (TransformT (WriterT Change IO))
   -> [Rewrite Universe]
   -> Retrie ()
-applyWithStrategy = applyWithUpdateAndStrategy updateContext
+applyWithStrategy strategy =
+  applyWithConfig defaultApplyConfig { acStrategy = strategy }
 
 -- | Apply a set of rewrites with custom context-update and traversal strategy.
 applyWithUpdateAndStrategy
@@ -206,29 +275,59 @@ applyWithUpdateAndStrategy
   -> Strategy (TransformT (WriterT Change IO))
   -> [Rewrite Universe]
   -> Retrie ()
-applyWithUpdateAndStrategy _       _        []  = return ()
-applyWithUpdateAndStrategy updCtxt strategy rrs = do
+applyWithUpdateAndStrategy updCtxt strategy =
+  applyWithConfig defaultApplyConfig
+    { acContextUpdater = updCtxt, acStrategy = strategy }
+
+-- | Most-general apply variant, taking an 'ApplyConfig'.
+applyWithConfig :: ApplyConfig -> [Rewrite Universe] -> Retrie ()
+applyWithConfig _ [] = return ()
+applyWithConfig ApplyConfig{..} rrs = do
   focus rrs
   singleton $ Compute $ rs $ \ fixityEnv ->
     traverse $ flip transformA $
-      everywhereMWithContextBut strategy
-        (const False) updCtxt replace (emptyContext fixityEnv m d)
+      everywhereMWithContextBut acStrategy
+        (const False) acContextUpdater replace
+        (emptyContextWithRenameInfo fixityEnv acRenameInfo m d)
   where
-    m = foldMap mkRewriter rrs
-    d = foldMap mkRewriter $ rewritesWithDependents rrs
+    -- Thread the RenameInfo's NameMap into template construction so
+    -- template variables it covers are keyed (and later matched) by
+    -- renamer-resolved Name; see the VMap instance.
+    compileRewrite =
+      mkLocalRewriterWithNames (riNameMap acRenameInfo) emptyAlphaEnv
+    m = foldMap compileRewrite rrs
+    d = foldMap compileRewrite $ rewritesWithDependents rrs
 
 -- | Query the AST. Each match returns the context of the match, a substitution
 -- mapping quantifiers to matched subtrees, and the query's value.
 query :: [Query Universe v] -> Retrie [(Context, Substitution, v)]
-query = queryWithUpdate updateContext
+query = queryWithConfig defaultApplyConfig
+
+-- | Query the AST with a user-supplied 'RenameInfo'. See
+-- 'applyWithRenameInfo'.
+queryWithRenameInfo
+  :: RenameInfo
+  -> [Query Universe v]
+  -> Retrie [(Context, Substitution, v)]
+queryWithRenameInfo ri =
+  queryWithConfig defaultApplyConfig { acRenameInfo = ri }
 
 -- | Query the AST with a custom context update function.
 queryWithUpdate
   :: ContextUpdater
   -> [Query Universe v]
   -> Retrie [(Context, Substitution, v)]
-queryWithUpdate _       [] = return []
-queryWithUpdate updCtxt qs = do
+queryWithUpdate updCtxt =
+  queryWithConfig defaultApplyConfig { acContextUpdater = updCtxt }
+
+-- | Most-general query variant, taking an 'ApplyConfig'
+-- ('acStrategy' is not used by queries).
+queryWithConfig
+  :: ApplyConfig
+  -> [Query Universe v]
+  -> Retrie [(Context, Substitution, v)]
+queryWithConfig _ [] = return []
+queryWithConfig ApplyConfig{..} qs = do
   focus qs
   singleton $ Compute $ do
     fixityEnv <- ask
@@ -237,13 +336,14 @@ queryWithUpdate updCtxt qs = do
       annotatedResults <- transformA modl $
         everythingMWithContextBut
           (const False)
-          updCtxt
+          acContextUpdater
           (genericQ matcher)
-          (emptyContext fixityEnv mempty mempty)
+          (emptyContextWithRenameInfo fixityEnv acRenameInfo mempty mempty)
       return (astA annotatedResults)
     return $ concat results
   where
-    matcher = foldMap mkMatcher qs
+    matcher =
+      foldMap (mkLocalMatcherWithNames (riNameMap acRenameInfo) emptyAlphaEnv) qs
 
 -- | If the first 'Retrie' computation makes a change to the module,
 -- run the second 'Retrie' computation.
@@ -255,7 +355,7 @@ ifChangedComp r1 r2 = do
   (_, c) <- listen r1
   case c of
     Change{} -> r2
-    NoChange  -> return ()
+    NoChange -> return ()
 
 -- | Iterate given 'Retrie' computation until it no longer makes changes,
 -- or N times, whichever happens first.
@@ -274,7 +374,7 @@ topDownPrune p cs x = do
   (p', c) <- listenTransformT (p x)
   case c of
     Change{} -> return p'
-    NoChange  -> cs x
+    NoChange -> cs x
 
 -- | Monad transformer shuffling.
 listenTransformT

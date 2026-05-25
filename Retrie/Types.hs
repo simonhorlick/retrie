@@ -23,6 +23,7 @@ module Retrie.Types
   , Matcher(..)
   , mkMatcher
   , mkLocalMatcher
+  , mkLocalMatcherWithNames
   , runMatcher
     -- * Rewrites and Rewriters
   , Rewrite
@@ -30,6 +31,7 @@ module Retrie.Types
   , Rewriter
   , mkRewriter
   , mkLocalRewriter
+  , mkLocalRewriterWithNames
   , runRewriter
   , MatchResult(..)
   , Template(..)
@@ -62,6 +64,7 @@ import Retrie.Fixity
 import Retrie.GHC
 import Retrie.PatternMap.Class
 import Retrie.Quantifiers
+import Retrie.RenameInfo
 import Retrie.Substitution
 import Retrie.Universe
 
@@ -86,6 +89,19 @@ data Context = Context
   , ctxtSubst :: Maybe Substitution
     -- ^ If present, update substitution with binder renamings.
     -- Used to implement capture-avoiding substitution.
+  , ctxtRenameInfo :: RenameInfo
+    -- ^ Optional side-table derived from a 'RenamedSource'.
+    -- Lets retrie see binders introduced by features the parser pass
+    -- cannot resolve (notably @RecordWildCards@ and @NamedFieldPuns@).
+    -- Defaults to 'emptyRenameInfo', which is silent and matches
+    -- legacy behaviour.
+  , ctxtScopeNames :: FastStringEnv Name
+    -- ^ Renamer-resolved 'Name's of the local binders currently in
+    -- scope, keyed by occurrence string (innermost binder wins,
+    -- matching how shadowing resolves). Only populated when a
+    -- 'RenameInfo' is supplied; a miss means unknown, not unbound.
+    -- Used to detect when a free variable of a rewrite template would
+    -- be captured by a binder enclosing the match site.
   , ctxtMatchSpan :: Maybe SrcSpan
     -- ^ Location of the node rewrites are currently being matched at,
     -- set by the traversal just before the match is attempted. Lets a
@@ -153,10 +169,24 @@ mkMatcher = mkLocalMatcher emptyAlphaEnv
 
 -- | Compile a 'Query' into a 'Matcher' within a given local scope. Useful for
 -- introducing local matchers which only match within a given local scope.
+--
+-- The template is built without 'NameMap' information; templates that
+-- need to match by renamer-resolved 'Name' should be built via
+-- 'mkLocalMatcherWithNames'.
 mkLocalMatcher :: Matchable ast => AlphaEnv -> Query ast v -> Matcher v
-mkLocalMatcher env Query{..} = Matcher $
+mkLocalMatcher = mkLocalMatcherWithNames mempty
+
+-- | Like 'mkLocalMatcher', but threads a 'NameMap' through the
+-- template-building walk. Templates inserted via this entry point
+-- also key their 'HsVar' positions by 'Unique', so a later 'runMatcher'
+-- whose 'Context' carries a matching 'NameMap' can match qualified,
+-- unqualified, and aliased references uniformly.
+mkLocalMatcherWithNames
+  :: Matchable ast => NameMap -> AlphaEnv -> Query ast v -> Matcher v
+mkLocalMatcherWithNames nm env Query{..} = Matcher $
   I.singleton (alphaEnvOffset env) $
     insertMatch
+      nm
       emptyAlphaEnv
       qQuantifiers
       (inject $ astA qPattern)
@@ -178,7 +208,7 @@ runMatcher
 runMatcher Context{..} (Matcher m) ast = do
   seed <- get
   let
-    matchEnv = ME ctxtInScope (\x -> unsafeMkA x seed)
+    matchEnv = ME ctxtInScope (\x -> unsafeMkA x seed) (riNameMap ctxtRenameInfo)
     uast = inject ast
 
   return
@@ -224,9 +254,21 @@ mkRewriter = mkLocalRewriter emptyAlphaEnv
 
 -- | Compile a 'Rewrite' into a 'Rewriter' with a given local scope. Useful for
 -- introducing local matchers which only match within a given local scope.
+--
+-- Templates built via this entry point do /not/ key by 'Name'. To
+-- match qualified references by Name, build the rewriter with
+-- 'mkLocalRewriterWithNames' and supply the same 'NameMap' used to
+-- construct the rewrite's template.
 mkLocalRewriter :: Matchable ast => AlphaEnv -> Rewrite ast -> Rewriter
-mkLocalRewriter env q@Query{..} =
-  mkLocalMatcher env q { qResult = RewriterResult{..} }
+mkLocalRewriter = mkLocalRewriterWithNames mempty
+
+-- | Like 'mkLocalRewriter', but threads a 'NameMap' through the
+-- template-building walk so the rewriter can match by renamer-resolved
+-- 'Name'. See 'mkLocalMatcherWithNames'.
+mkLocalRewriterWithNames
+  :: Matchable ast => NameMap -> AlphaEnv -> Rewrite ast -> Rewriter
+mkLocalRewriterWithNames nm env q@Query{..} =
+  mkLocalMatcherWithNames nm env q { qResult = RewriterResult{..} }
   where
     rrOrigin = getOrigin $ astA qPattern
     rrQuantifiers = qQuantifiers

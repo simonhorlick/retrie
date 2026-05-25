@@ -26,6 +26,7 @@ import Golden
 import GroundTerms
 import Ignore
 import ParseQualified
+import RenameInfoTests
 import Replacements
 import Targets
 
@@ -42,6 +43,7 @@ allTests libdir rtVerbosity = do
     , cppTest
     , dependentStmtTest libdir rtDir p rtVerbosity
     , excludeTest rtVerbosity
+    , renameInfoTests libdir
     , replacementsTest libdir
     , TestLabel "golden" $ TestList
       [ TestLabel rtName $ TestCase $ runTest libdir p RetrieTest{..}

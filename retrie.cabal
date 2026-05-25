@@ -45,6 +45,7 @@ library
     Retrie.AlphaEnv,
     Retrie.CPP,
     Retrie.Context,
+    Retrie.ContextCapture,
     Retrie.Debug,
     Retrie.Elaborate,
     Retrie.ExactPrint,
@@ -62,6 +63,7 @@ library
     Retrie.Pretty,
     Retrie.Quantifiers,
     Retrie.Query,
+    Retrie.RenameInfo,
     Retrie.Replace,
     Retrie.Rewrites,
     Retrie.Rewrites.Function,
@@ -153,6 +155,7 @@ test-suite test
     GroundTerms,
     Ignore,
     ParseQualified,
+    RenameInfoTests,
     Replacements,
     Targets,
     Util

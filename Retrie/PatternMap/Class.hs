@@ -19,6 +19,7 @@ import Retrie.AlphaEnv
 import Retrie.ExactPrint
 import Retrie.GHC
 import Retrie.Quantifiers
+import Retrie.RenameInfo (NameMap)
 import Retrie.Substitution
 
 ------------------------------------------------------------------------
@@ -26,6 +27,12 @@ import Retrie.Substitution
 data MatchEnv = ME
   { meAlphaEnv :: AlphaEnv
   , mePruneA :: forall a. a -> Annotated a
+  , meNameMap :: NameMap
+    -- ^ Map from parser-pass 'RealSrcSpan' to renamer-resolved
+    -- 'Name'. The 'VMap' matcher consults this so that qualified,
+    -- unqualified, and aliased references to the same definition all
+    -- compare equal. Empty when no 'RenameInfo' was supplied to the
+    -- 'Context'.
   }
 
 extendMatchEnv :: MatchEnv -> [RdrName] -> MatchEnv
@@ -34,6 +41,10 @@ extendMatchEnv me bs =
 
 pruneMatchEnv :: Int -> MatchEnv -> MatchEnv
 pruneMatchEnv i me = me { meAlphaEnv = pruneAlphaEnv i (meAlphaEnv me) }
+
+-- | Empty 'NameMap'.
+emptyNameMap :: NameMap
+emptyNameMap = mempty
 
 ------------------------------------------------------------------------
 
@@ -58,7 +69,11 @@ class PatternMap m where
   mEmpty :: m a
   mUnion :: m a -> m a -> m a
 
-  mAlter :: AlphaEnv -> Quantifiers -> Key m -> A a -> m a -> m a
+  -- | Insert (or update) a value at the given 'Key'. The 'NameMap'
+  -- carries the renamer-resolved 'Name' for every parser-pass span;
+  -- most instances ignore it and only the variable keys ('vKey')
+  -- consult it.
+  mAlter :: NameMap -> AlphaEnv -> Quantifiers -> Key m -> A a -> m a -> m a
   mMatch :: MatchEnv -> Key m -> (Substitution, m a) -> [(Substitution, a)]
 
 -- Useful to get the chain started in mMatch
@@ -86,9 +101,9 @@ instance PatternMap MaybeMap where
   mUnion :: MaybeMap a -> MaybeMap a -> MaybeMap a
   mUnion (MaybeMap m1) (MaybeMap m2) = MaybeMap $ m1 ++ m2
 
-  mAlter :: AlphaEnv -> Quantifiers -> Key MaybeMap -> A a -> MaybeMap a -> MaybeMap a
-  mAlter _ _ () f (MaybeMap []) = MaybeMap $ maybeToList $ f Nothing
-  mAlter _ _ () f (MaybeMap xs) = MaybeMap $ mapMaybe (f . Just) xs
+  mAlter :: NameMap -> AlphaEnv -> Quantifiers -> Key MaybeMap -> A a -> MaybeMap a -> MaybeMap a
+  mAlter _ _ _ () f (MaybeMap []) = MaybeMap $ maybeToList $ f Nothing
+  mAlter _ _ _ () f (MaybeMap xs) = MaybeMap $ mapMaybe (f . Just) xs
 
   mMatch
     :: MatchEnv
@@ -117,9 +132,9 @@ instance PatternMap m => PatternMap (ListMap m) where
     , lmCons = unionOn lmCons m1 m2
     }
 
-  mAlter :: AlphaEnv -> Quantifiers -> Key (ListMap m) -> A a -> ListMap m a -> ListMap m a
-  mAlter env vs []     f m = m { lmNil  = mAlter env vs () f (lmNil m) }
-  mAlter env vs (x:xs) f m = m { lmCons = mAlter env vs x (toA (mAlter env vs xs f)) (lmCons m) }
+  mAlter :: NameMap -> AlphaEnv -> Quantifiers -> Key (ListMap m) -> A a -> ListMap m a -> ListMap m a
+  mAlter nm env vs []     f m = m { lmNil  = mAlter nm env vs () f (lmNil m) }
+  mAlter nm env vs (x:xs) f m = m { lmCons = mAlter nm env vs x (toA (mAlter nm env vs xs f)) (lmCons m) }
 
   mMatch :: MatchEnv -> Key (ListMap m) -> (Substitution, ListMap m a) -> [(Substitution, a)]
   mMatch env []     = mapFor lmNil >=> mMatch env ()
@@ -130,5 +145,5 @@ instance PatternMap m => PatternMap (ListMap m) where
 findMatch :: PatternMap m => MatchEnv -> Key m -> m a -> [(Substitution, a)]
 findMatch env k m = mMatch env k (emptySubst, m)
 
-insertMatch :: PatternMap m => AlphaEnv -> Quantifiers -> Key m -> a -> m a -> m a
-insertMatch env vs k x = mAlter env vs k (const (Just x))
+insertMatch :: PatternMap m => NameMap -> AlphaEnv -> Quantifiers -> Key m -> a -> m a -> m a
+insertMatch nm env vs k x = mAlter nm env vs k (const (Just x))

@@ -13,12 +13,13 @@ module Retrie.Expr
   ( bitraverseHsConDetails
   , getUnparened
   , grhsToExpr
+  , inlineLocalBinds
+  , mkAnchor
   , mkApps
   , mkConPatIn
   , mkEpAnn
   , mkHsAppsTy
   , mkLams
-  , mkAnchor
   , mkLet
   , mkLoc
   , mkLocA
@@ -215,7 +216,9 @@ mkLet EmptyLocalBinds{} e = return e
 mkLet lbs e = do
 #if __GLASGOW_HASKELL__ >= 912
   letTokLoc <- mkAnchor (SameLine 0)
-  inTokLoc <- mkAnchor (DifferentLine 1 1)
+  -- The column must produce the same text as the pre-9.12 branch below,
+  -- where the token's (1,1) compounds with the annotation's (1,5) anchor.
+  inTokLoc <- mkAnchor (DifferentLine 1 6)
   let tokLet = EpTok letTokLoc
       tokIn = EpTok inTokLoc
   le <- mkLocA (SameLine 1) $ HsLet (tokLet, tokIn) lbs e
@@ -226,6 +229,45 @@ mkLet lbs e = do
   le <- mkLocA (SameLine 1) $ HsLet an tokLet lbs tokIn e
 #endif
   return le
+
+#if __GLASGOW_HASKELL__ >= 912
+-- | Reshape a 'HsLocalBinds' that came from a function's @where@
+-- clause so it prints as the body of a @let ... in@: strip the @where@
+-- keyword from the annotation and leave everything else untouched. The
+-- declarations keep their original deltas -- each on its own line at
+-- its original indentation -- which preserves their mutual alignment
+-- no matter how many there are; the @in@ then follows on its own line
+-- (see 'mkLet'). Callers that build a @let@ from a @where@ clause (see
+-- 'Retrie.Rewrites.Function') apply this before 'mkLet'; binds from
+-- any other origin should be passed to 'mkLet' untouched.
+inlineLocalBinds :: HsLocalBinds GhcPs -> HsLocalBinds GhcPs
+inlineLocalBinds (HsValBinds (EpAnn anc al cs) vb) =
+  HsValBinds (EpAnn anc' al' cs) vb
+  where
+    -- The @where@ keyword (and its trailing space) lived in 'al_rest';
+    -- clearing it leaves no @where@ in the printed output.
+    al'  = al { al_rest = NoEpTok }
+    -- The @where@ keyword sat on its own line, so the block's anchor
+    -- carried a line break of its own; collapsed onto the @let@ line it
+    -- would otherwise print as a line of trailing whitespace before the
+    -- first declaration's own line break.
+    anc' = setEpaDelta (SameLine 0) anc
+inlineLocalBinds other = other
+
+setEpaDelta :: DeltaPos -> EpaLocation -> EpaLocation
+setEpaDelta dp (EpaSpan l)       = dpAnchor l dp
+setEpaDelta dp (EpaDelta l _ cs) = EpaDelta l dp cs
+#else
+-- | As above, for the pre-9.10 annotations: the @where@ keyword is an
+-- 'AddEpAnn' in 'al_rest', and the block's delta lives in its anchor's
+-- 'AnchorOperation'.
+inlineLocalBinds :: HsLocalBinds GhcPs -> HsLocalBinds GhcPs
+inlineLocalBinds (HsValBinds (EpAnn (Anchor r _) al cs) vb) =
+  HsValBinds (EpAnn (Anchor r (MovedAnchor (SameLine 0))) al' cs) vb
+  where
+    al' = al { al_rest = [] }
+inlineLocalBinds other = other
+#endif
 
 mkApps :: MonadIO m => LHsExpr GhcPs -> [LHsExpr GhcPs] -> TransformT m (LHsExpr GhcPs)
 mkApps e []     = return e
@@ -556,7 +598,11 @@ parenifyP Context{..} p@(L _ pat)
     anc2 <- mkAnchor (SameLine 0)
     let tokLP = EpTok anc1
         tokRP = EpTok anc2
-    mkParen' (getEntryDP p) (\_ -> ParPat (tokLP, tokRP) p)
+    -- Mirrors the pre-9.12 branch below: reset the inner pattern's
+    -- entry DP so it sits flush against the opening paren rather than
+    -- inheriting whatever leading whitespace it had at its original
+    -- (now-replaced) position.
+    mkParen' (getEntryDP p) (\_ -> ParPat (tokLP, tokRP) (setEntryDP p (SameLine 0)))
   | otherwise = return p
 #else
 parenifyP Context{..} p@(L _ pat)

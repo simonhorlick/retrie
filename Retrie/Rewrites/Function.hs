@@ -67,19 +67,12 @@ matchToRewrites
   -> TransformT IO [Rewrite (LHsExpr GhcPs)]
 matchToRewrites e imps dir (L _ alt) = do
   let
-    pats = getMatchPats alt
+    pats = matchPats alt
     grhss = m_grhss alt
   qss <- for (zip (inits pats) (tails pats)) $
     makeFunctionQuery e imps dir grhss mkApps
   qs <- backtickRules e imps dir grhss pats
   return $ qs ++ concat qss
-
-getMatchPats :: Match GhcPs (LHsExpr GhcPs) -> [LPat GhcPs]
-#if __GLASGOW_HASKELL__ < 912
-getMatchPats = m_pats
-#else
-getMatchPats = unLoc . m_pats
-#endif
 
 type AppBuilder =
   LHsExpr GhcPs -> [LHsExpr GhcPs] -> TransformT IO (LHsExpr GhcPs)
@@ -124,7 +117,9 @@ makeFunctionQuery e imps dir grhss mkAppFn (argpats, bndpats)
     -- lift $ debugPrint Loud "makeFunctionQuery:e="  [showAst e]
     lhs <- mkAppFn e es
     for rhssList $ \ grhs -> do
-      le <- mkLet lbs (grhsToExpr grhs)
+      -- The definition's where clause becomes the body of a let; strip
+      -- the where keyword and pull the first decl onto the let line.
+      le <- mkLet (inlineLocalBinds lbs) (grhsToExpr grhs)
       rhs <- mkLams bndpats le
       let
         (pat, temp) =
@@ -191,7 +186,8 @@ backtickRules e imps dir@LeftToRight grhss (p1:p2:rest) = do
 #endif
     right _ _ = fail "backtickRules - right: impossible!"
   -- One rewrite per split of the trailing arguments, mirroring
-  -- 'matchToRewrites'.
+  -- 'matchToRewrites': fully applied, and every partial application
+  -- (the unsupplied parameters become lambda binders).
   qss <- for (zip (inits rest) (tails rest)) $ \(ri, rt) ->
     makeFunctionQuery e imps dir grhss both (p1 : p2 : ri, rt)
   qsl <- makeFunctionQuery e imps dir grhss left ([p1], p2 : rest)
