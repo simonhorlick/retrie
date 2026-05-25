@@ -64,7 +64,7 @@ matchToRewrites
   -> TransformT IO [Rewrite (LHsExpr GhcPs)]
 matchToRewrites e imps dir (L _ alt) = do
   let
-    pats = getMatchPats alt
+    pats = matchPats alt
     grhss = m_grhss alt
   qss <- for (zip (inits pats) (tails pats)) $
     makeFunctionQuery e imps dir grhss mkApps
@@ -179,7 +179,8 @@ backtickRules e imps dir@LeftToRight grhss (p1:p2:rest) = do
 #endif
     right _ _ = fail "backtickRules - right: impossible!"
   -- One rewrite per split of the trailing arguments, mirroring
-  -- 'matchToRewrites'.
+  -- 'matchToRewrites': fully applied, and every partial application
+  -- (the unsupplied parameters become lambda binders).
   qss <- for (zip (inits rest) (tails rest)) $ \(ri, rt) ->
     makeFunctionQuery e imps dir grhss both (p1 : p2 : ri, rt)
   qsl <- makeFunctionQuery e imps dir grhss left ([p1], p2 : rest)

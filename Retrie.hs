@@ -28,9 +28,13 @@ module Retrie
 
     -- *** Applying Rewrites
   , apply
+  , applyWithConfig
+  , applyWithRenameInfo
   , applyWithStrategy
   , applyWithUpdate
   , applyWithUpdateAndStrategy
+  , ApplyConfig(..)
+  , defaultApplyConfig
   , addImports
     -- *** Control Flow
   , ifChanged
@@ -39,7 +43,13 @@ module Retrie
   , focus
     -- *** Querying the AST
   , query
+  , queryWithConfig
+  , queryWithRenameInfo
   , queryWithUpdate
+    -- *** Renamer Info
+  , RenameInfo
+  , emptyRenameInfo
+  , mkRenameInfo
     -- *** Traversal Strategies
   , bottomUp
   , topDown
@@ -132,6 +142,7 @@ import Retrie.Query
   ( QuerySpec(..)
   , parseQuerySpecs
   )
+import Retrie.RenameInfo
 import Retrie.Rewrites
 import Retrie.Run
 import Retrie.Subst

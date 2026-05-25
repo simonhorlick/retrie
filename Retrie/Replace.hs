@@ -20,6 +20,7 @@ import Data.Char (isSpace)
 import Data.List (intercalate)
 import Data.Generics
 
+import Retrie.ContextCapture
 import Retrie.ExactPrint
 import Retrie.Expr
 import Retrie.FreeVars
@@ -76,7 +77,12 @@ replaceImpl c e = do
 
   case match of
     NoMatch -> return e
-    MatchResult sub Template{..} -> do
+    -- Free variables of the template must not be captured by binders
+    -- enclosing the match site (same occurrence string resolving to a
+    -- different Name). When they would be, refuse the match and leave
+    -- the call site untouched.
+    MatchResult sub Template{..} -> case detectContextCaptures c sub (astA tTemplate) of
+     [] -> do
       -- graft template into target module
       t' <- graftA tTemplate
       -- substitute for quantifiers in grafted template
@@ -120,11 +126,16 @@ replaceImpl c e = do
       -- lift $ liftIO $ debugPrint Loud "replaceImpl:t'=" [showAst t']
       -- lift $ liftIO $ debugPrint Loud "replaceImpl:res=" [showAst res]
 
-      let replacement = Replacement (getLocA e) orig repl
+      let replacement = Replacement
+            { replLocation = getLocA e
+            , replOriginal = orig
+            , replReplacement = repl
+            }
       TransformT $ lift $ tell $ Change [replacement] [tImports]
       -- make the actual replacement
       return res
 
+     _capturing -> return e
 
 -- | Records a replacement made. In cases where we cannot use ghc-exactprint
 -- to print the resulting AST (e.g. CPP modules), we fall back on splicing
@@ -142,8 +153,7 @@ data Change = NoChange | Change [Replacement] [AnnotatedImports]
 instance Semigroup Change where
   NoChange         <> other            = other
   other            <> NoChange         = other
-  (Change rs1 is1) <> (Change rs2 is2) =
-    Change (rs1 <> rs2) (is1 <> is2)
+  (Change rs1 is1) <> (Change rs2 is2) = Change (rs1 <> rs2) (is1 <> is2)
 
 instance Monoid Change where
   mempty = NoChange

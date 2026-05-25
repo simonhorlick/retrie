@@ -26,6 +26,7 @@ import Golden
 import GroundTerms
 import Ignore
 import ParseQualified
+import RenameInfoTests
 import Targets
 
 allTests :: LibDir -> Verbosity -> IO Test
@@ -41,6 +42,7 @@ allTests libdir rtVerbosity = do
     , cppTest
     , dependentStmtTest libdir rtDir p rtVerbosity
     , excludeTest rtVerbosity
+    , renameInfoTests libdir
     , TestLabel "golden" $ TestList
       [ TestLabel rtName $ TestCase $ runTest libdir p RetrieTest{..}
       | testFile <- testFiles

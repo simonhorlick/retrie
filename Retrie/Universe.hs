@@ -26,6 +26,7 @@ import Retrie.GHC
 import Retrie.PatternMap.Class
 import Retrie.PatternMap.Instances
 import Retrie.Quantifiers
+import Retrie.RenameInfo (NameMap)
 import Retrie.Substitution
 
 -- | A sum type to collect all possible top-level rewritable types.
@@ -118,13 +119,13 @@ instance PatternMap UMap where
     (unionOn umType m1 m2)
     (unionOn umPat m1 m2)
 
-  mAlter :: AlphaEnv -> Quantifiers -> Universe -> A a -> UMap a -> UMap a
-  mAlter env vs u f m = go u
+  mAlter :: NameMap -> AlphaEnv -> Quantifiers -> Universe -> A a -> UMap a -> UMap a
+  mAlter nm env vs u f m = go u
     where
-      go (ULHsExpr e) = m { umExpr = mAlter env vs e f (umExpr m) }
-      go (ULStmt s) = m { umStmt = mAlter env vs s f (umStmt m) }
-      go (ULType t) = m { umType = mAlter env vs t f (umType m) }
-      go (ULPat p) = m { umPat  = mAlter env vs (cLPat p) f (umPat m) }
+      go (ULHsExpr e) = m { umExpr = mAlter nm env vs e f (umExpr m) }
+      go (ULStmt s) = m { umStmt = mAlter nm env vs s f (umStmt m) }
+      go (ULType t) = m { umType = mAlter nm env vs t f (umType m) }
+      go (ULPat p) = m { umPat  = mAlter nm env vs (cLPat p) f (umPat m) }
 
   mMatch :: MatchEnv -> Universe -> (Substitution, UMap a) -> [(Substitution, a)]
   mMatch env = go

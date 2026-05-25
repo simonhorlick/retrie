@@ -15,12 +15,12 @@ module Retrie.Expr
   , getUnparened
   , grhsToExpr
   , inlineLocalBinds
+  , mkAnchor
   , mkApps
   , mkConPatIn
   , mkEpAnn
   , mkHsAppsTy
   , mkLams
-  , mkAnchor
   , mkLet
   , mkLoc
   , mkLocA

@@ -13,14 +13,18 @@ module Retrie.Context
   ( ContextUpdater
   , updateContext
   , emptyContext
+  , emptyContextWithRenameInfo
   ) where
 
 import Control.Monad.IO.Class
 import Data.Char (isDigit)
 import Data.Either (partitionEithers)
+import Data.Function (on)
 import Data.Generics hiding (Fixity)
 #if __GLASGOW_HASKELL__ < 912
 import Data.List
+#else
+import Data.List (nubBy)
 #endif
 import Data.Maybe
 
@@ -29,6 +33,7 @@ import Retrie.ExactPrint
 import Retrie.Fixity
 import Retrie.FreeVars
 import Retrie.GHC
+import Retrie.RenameInfo
 import Retrie.Substitution
 import Retrie.SYB
 import Retrie.Types
@@ -127,7 +132,7 @@ updateContext c i =
 
     updExp RecordUpd{}
       | i == firstChild = withPrec c (SourceText "RecordUpd") 11 InfixN i
-    updExp (HsLet _ _ lbs _ _) = addInScope neverParen $ collectLocalBinders CollNoDictBinders lbs
+    updExp (HsLet _ _ lbs _ _) = addInScope' neverParen $ resolvedLocalBinders c lbs
 #else
     updType HsAppTy{} = withPrec c (getPrec appPrec) InfixL i
     updType HsFunTy{} = withPrec c (getPrec funPrec) InfixR (i - 1)
@@ -146,7 +151,7 @@ updateContext c i =
 
     updExp RecordUpd{}
       | i == firstChild = withPrec c 11 InfixN i
-    updExp (HsLet _ lbs _) = addInScope neverParen $ collectLocalBinders CollNoDictBinders lbs
+    updExp (HsLet _ lbs _) = addInScope' neverParen $ resolvedLocalBinders c lbs
 #endif
     -- The statements of a do or mdo block, and the qualifiers and body
     -- of a comprehension, form a layout group; its column is the first
@@ -175,28 +180,23 @@ updateContext c i =
     updExp _ = neverParen
 
     updMatch :: Match GhcPs (LHsExpr GhcPs) -> Context
-    updMatch
+    updMatch m
       | i == 2  -- m_pats field
-#if __GLASGOW_HASKELL__ < 912
-      = addInScope c{ctxtParentPrec = IsLhs} . collectPatsBinders CollNoDictBinders . m_pats
-      | otherwise = addInScope neverParen . collectPatsBinders CollNoDictBinders . m_pats
-#else
-      = addInScope c{ctxtParentPrec = IsLhs} . collectPatsBinders CollNoDictBinders . unLoc . m_pats
+      = addInScope' c{ctxtParentPrec = IsLhs} (resolvedMatchBinders c m)
       | otherwise
-      = addInScope neverParen . collectPatsBinders CollNoDictBinders . unLoc . m_pats
-#endif
-      where
+      = addInScope' neverParen (resolvedMatchBinders c m)
 
     updGRHSs :: GRHSs GhcPs (LHsExpr GhcPs) -> Context
-    updGRHSs = addInScope neverParen . collectLocalBinders CollNoDictBinders . grhssLocalBinds
+    updGRHSs grhss =
+      addInScope' neverParen (resolvedLocalBinders c (grhssLocalBinds grhss))
 
     updGRHS :: GRHS GhcPs (LHsExpr GhcPs) -> Context
     updGRHS (GRHS _ gs _)
         -- binders are in scope over the body (right child) only
-      | i > firstChild = addInScope neverParen bs
-      | otherwise = fst $ updateSubstitution neverParen bs
+      | i > firstChild = addInScope' neverParen bs
+      | otherwise = fst $ updateSubstitution neverParen (fst bs)
       where
-        bs = collectLStmtsBinders CollNoDictBinders gs
+        bs = foldMap (resolvedStmtBinders c) gs
 
     updStmt :: Stmt GhcPs (LHsExpr GhcPs) -> Context
     -- The body of a do-block statement sits where a leading 'let' would
@@ -216,10 +216,10 @@ updateContext c i =
       | i > 0 = insertDependentRewrites neverParen bs ls
         -- lets are recursive in do-blocks
       | L _ (LetStmt _ bnds) <- ls =
-          return $ addInScope neverParen $ collectLocalBinders CollNoDictBinders bnds
-      | otherwise = return $ fst $ updateSubstitution neverParen bs
+          return $ addInScope' neverParen $ resolvedLocalBinders c bnds
+      | otherwise = return $ fst $ updateSubstitution neverParen (fst bs)
       where
-        bs = collectLStmtBinders CollNoDictBinders ls
+        bs = resolvedStmtBinders c ls
 
     updHsBind :: HsBind GhcPs -> Context
     updHsBind FunBind{..} =
@@ -260,15 +260,25 @@ withPrec c prec dir i = c{ ctxtParentPrec = HasPrec fixity }
       InfixN -> InfixN
 
 -- | Create an empty 'Context' with given 'FixityEnv', rewriter, and dependent
--- rewrite generator.
+-- rewrite generator. 'ctxtRenameInfo' defaults to 'emptyRenameInfo';
+-- use 'emptyContextWithRenameInfo' to supply one.
 emptyContext :: FixityEnv -> Rewriter -> Rewriter -> Context
-emptyContext ctxtFixityEnv ctxtRewriter ctxtDependents = Context{..}
+emptyContext fEnv rw deps =
+  emptyContextWithRenameInfo fEnv emptyRenameInfo rw deps
+
+-- | 'emptyContext' but additionally seeded with a 'RenameInfo' side
+-- table so retrie can see wildcard- and pun-introduced binders.
+emptyContextWithRenameInfo
+  :: FixityEnv -> RenameInfo -> Rewriter -> Rewriter -> Context
+emptyContextWithRenameInfo
+  ctxtFixityEnv ctxtRenameInfo ctxtRewriter ctxtDependents = Context{..}
   where
     ctxtBinders = []
     ctxtInScope = emptyAlphaEnv
     ctxtLayoutCol = 1
     ctxtParentPrec = NeverParen
     ctxtSubst = Nothing
+    ctxtScopeNames = emptyFsEnv
     ctxtMatchSpan = Nothing
 
 -- Deal with Trees-That-Grow adding extension points
@@ -278,18 +288,21 @@ firstChild = 1
 
 -- | Add dependent rewrites to 'ctxtRewriter' if necessary.
 insertDependentRewrites
-  :: (Matchable k, MonadIO m) => Context -> [RdrName] -> k -> TransformT m Context
+  :: (Matchable k, MonadIO m)
+  => Context -> ([RdrName], [Name]) -> k -> TransformT m Context
 insertDependentRewrites c bs x = do
   r <- runRewriter id c (ctxtDependents c) x
   let
-    c' = addInScope c bs
+    c' = addInScope' c bs
   case r of
     NoMatch -> return c'
     MatchResult _ Template{..} -> do
       let
         rrs = fromMaybe [] tDependents
         ds = rewritesWithDependents rrs
-        f = foldMap (mkLocalRewriter $ ctxtInScope c')
+        f = foldMap $
+          mkLocalRewriterWithNames
+            (riNameMap $ ctxtRenameInfo c') (ctxtInScope c')
       return c'
         { ctxtRewriter = f rrs <> ctxtRewriter c'
         , ctxtDependents = f ds <> ctxtDependents c'
@@ -301,6 +314,84 @@ addInScope c bs =
   c' { ctxtInScope = foldr extendAlphaEnv (ctxtInScope c') bs' }
   where
     (c', bs') = updateSubstitution c bs
+
+-- | 'addInScope', additionally recording the binders' renamer-resolved
+-- 'Name's (when known) in 'ctxtScopeNames'. Later entries win over
+-- earlier ones for the same occurrence string, so as the traversal
+-- descends the innermost binder is the one recorded -- matching how
+-- shadowing resolves.
+addInScope' :: Context -> ([RdrName], [Name]) -> Context
+addInScope' c (bs, ns) =
+  (addInScope c bs)
+    { ctxtScopeNames = extendFsEnvList (ctxtScopeNames c)
+        [ (occNameFS (nameOccName n), n) | n <- ns ]
+    }
+
+-- | Local binders introduced by a 'HsLocalBinds', consulting any
+-- 'RenameInfo' attached to the 'Context' first. Falls back to
+-- parser-pass collection when no 'RenameInfo' was supplied (without
+-- paying for the 'scopeKey' subtree traversal) or when it has no
+-- entry for this node. The second component carries the
+-- renamer-resolved 'Name's when known (empty on the parser-pass
+-- fallback), feeding 'ctxtScopeNames'.
+resolvedLocalBinders :: Context -> HsLocalBinds GhcPs -> ([RdrName], [Name])
+resolvedLocalBinders c lbs
+  | hasScopeEntries (ctxtRenameInfo c)
+  , Just k <- scopeKey lbs
+  , Just ns <- lookupScopeNames k (ctxtRenameInfo c)
+  = (map nameToRdr ns, ns)
+  | otherwise = (collectLocalBinders CollNoDictBinders lbs, [])
+
+-- | Binders introduced by patterns: the given parser-pass collection,
+-- extended with the renamer's view of every pattern node present
+-- ('patBindersIn') -- which includes binders implicit in
+-- @RecordWildCards@ and @NamedFieldPuns@ patterns. Resolution is per
+-- pattern node by exact span, so a synthesized binding node
+-- contributes exactly the binders of the original patterns it reuses:
+-- the one-pattern lambda a section rewrite builds from
+-- @add x y = ...@ resolves @x@'s pattern but never sees @y@, and a
+-- tuple-dispatch case alternative wrapping original patterns resolves
+-- each of them, wildcard binders included.
+resolvedPatBinders
+  :: Data a => Context -> a -> [RdrName] -> ([RdrName], [Name])
+resolvedPatBinders c x defaultBs = (defaultBs ++ implicit, hits)
+  where
+    hits = patBindersIn x (ctxtRenameInfo c)
+    defaultFSs = map rdrFS defaultBs
+    implicit = nubBy ((==) `on` rdrFS)
+      [ r | n <- hits, let r = nameToRdr n, rdrFS r `notElem` defaultFSs ]
+
+-- | Pattern binders introduced by a 'Match'.
+resolvedMatchBinders
+  :: Context -> Match GhcPs (LHsExpr GhcPs) -> ([RdrName], [Name])
+resolvedMatchBinders c m =
+  resolvedPatBinders c pats (collectPatsBinders CollNoDictBinders pats)
+  where
+    pats = matchPats m
+
+-- | Binders introduced by a statement (in a @do@ block or a pattern
+-- guard). @let@ and @pat <- e@ statements can bind via
+-- @RecordWildCards@, so both consult the 'RenameInfo'.
+resolvedStmtBinders :: Context -> LStmt GhcPs (LHsExpr GhcPs) -> ([RdrName], [Name])
+resolvedStmtBinders c ls = case unLoc ls of
+  LetStmt _ lbs -> resolvedLocalBinders c lbs
+  BindStmt _ pat _ ->
+    resolvedPatBinders c pat (collectPatsBinders CollNoDictBinders [pat])
+  -- The compound forms bind whatever their inner statements bind;
+  -- resolve those recursively so a @rec@, parallel-comprehension, or
+  -- @then group by@ binder carries its renamer Name too. Collecting
+  -- only at the statement level mirrors 'collectStmtBinders': a
+  -- generic pattern walk would also pick up lambda and case binders
+  -- inside the statement bodies, which do not scope past them.
+  RecStmt{recS_stmts = stmts} ->
+    foldMap (resolvedStmtBinders c) (unLoc stmts)
+  ParStmt _ blocks _ _ ->
+    foldMap
+      (\(ParStmtBlock _ stmts _ _) -> foldMap (resolvedStmtBinders c) stmts)
+      blocks
+  TransStmt{trS_stmts = stmts} ->
+    foldMap (resolvedStmtBinders c) stmts
+  _ -> (collectLStmtBinders CollNoDictBinders ls, [])
 
 -- | Add set of binders to 'ctxtBinders'.
 addBinders :: Context -> [RdrName] -> Context
