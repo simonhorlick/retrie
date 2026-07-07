@@ -72,7 +72,7 @@ replaceImpl c e = do
   -- resulting expression, but we need to know the entry location
   -- of the parens, not the inner expression, so we have to
   -- keep both expressions around.
-  match <- runRewriter f c (ctxtRewriter c) (getUnparened e)
+  match <- runRewriter f c{ctxtMatchSpan = Just (getLocA e)} (ctxtRewriter c) (getUnparened e)
 
   case match of
     NoMatch -> return e

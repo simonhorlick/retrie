@@ -269,6 +269,7 @@ emptyContext ctxtFixityEnv ctxtRewriter ctxtDependents = Context{..}
     ctxtLayoutCol = 1
     ctxtParentPrec = NeverParen
     ctxtSubst = Nothing
+    ctxtMatchSpan = Nothing
 
 -- Deal with Trees-That-Grow adding extension points
 -- as the first child everywhere.

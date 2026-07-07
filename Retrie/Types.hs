@@ -91,6 +91,14 @@ data Context = Context
   , ctxtSubst :: Maybe Substitution
     -- ^ If present, update substitution with binder renamings.
     -- Used to implement capture-avoiding substitution.
+  , ctxtMatchSpan :: Maybe SrcSpan
+    -- ^ Location of the node rewrites are currently being matched at,
+    -- set by the traversal just before the match is attempted. Lets a
+    -- 'MatchResultTransformer' accept or refuse a match by where it
+    -- occurs (e.g. restrict rewriting to chosen call sites). A refused
+    -- match leaves the node unchanged and the traversal descends into
+    -- it, so a permitted location nested inside a refused one is still
+    -- rewritten.
   }
 
 -- | Precedence of parent node in the AST.
