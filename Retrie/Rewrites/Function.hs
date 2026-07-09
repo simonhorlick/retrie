@@ -142,14 +142,39 @@ backtickRules
   -> GRHSs GhcPs (LHsExpr GhcPs)
   -> [LPat GhcPs]
   -> TransformT IO [Rewrite (LHsExpr GhcPs)]
-backtickRules e imps dir@LeftToRight grhss ps@[p1, p2] = do
+backtickRules e imps dir@LeftToRight grhss (p1:p2:rest) = do
   let
     both, left, right :: AppBuilder
+    -- A function of arity greater than two used infix supplies its
+    -- first two arguments via the operator and the rest by ordinary
+    -- application. Concrete syntax forces the infix part into
+    -- parentheses -- @(1 `e` 2) 3@ -- and the pattern matcher treats
+    -- parens structurally, so the pattern must carry the 'HsPar' too.
+    both op (l:r:extra) = do
 #if __GLASGOW_HASKELL__ < 912
-    both op [l, r] = mkLocA (SameLine 1) (OpApp noAnn l op r)
+      opApp <- mkLocA (SameLine 1) (OpApp noAnn l op r)
 #else
-    both op [l, r] = mkLocA (SameLine 1) (OpApp noExtField l op r)
+      opApp <- mkLocA (SameLine 1) (OpApp noExtField l op r)
 #endif
+      case extra of
+        [] -> pure opApp
+        _  -> do
+#if __GLASGOW_HASKELL__ >= 912
+          anc1 <- mkAnchor (SameLine 0)
+          anc2 <- mkAnchor (SameLine 0)
+          let tokLP = EpTok anc1
+              tokRP = EpTok anc2
+          par <- mkParen'
+            (SameLine 1)
+            (\_ -> HsPar (tokLP, tokRP) (setEntryDP opApp (SameLine 0)))
+#else
+          let tokLP = L (TokenLoc (EpaDelta (SameLine 0) [])) HsTok
+              tokRP = L (TokenLoc (EpaDelta (SameLine 0) [])) HsTok
+          par <- mkLocA
+            (SameLine 1)
+            (HsPar noAnn tokLP (setEntryDP opApp (SameLine 0)) tokRP)
+#endif
+          mkApps par extra
     both _ _ = fail "backtickRules - both: impossible!"
 
 #if __GLASGOW_HASKELL__ < 912
@@ -165,10 +190,13 @@ backtickRules e imps dir@LeftToRight grhss ps@[p1, p2] = do
     right op [r] = mkLocA (SameLine 1) (SectionR noExtField op r)
 #endif
     right _ _ = fail "backtickRules - right: impossible!"
-  qs <- makeFunctionQuery e imps dir grhss both (ps, [])
-  qsl <- makeFunctionQuery e imps dir grhss left ([p1], [p2])
-  qsr <- makeFunctionQuery e imps dir grhss right ([p2], [p1])
-  return $ qs ++ qsl ++ qsr
+  -- One rewrite per split of the trailing arguments, mirroring
+  -- 'matchToRewrites'.
+  qss <- for (zip (inits rest) (tails rest)) $ \(ri, rt) ->
+    makeFunctionQuery e imps dir grhss both (p1 : p2 : ri, rt)
+  qsl <- makeFunctionQuery e imps dir grhss left ([p1], p2 : rest)
+  qsr <- makeFunctionQuery e imps dir grhss right ([p2], p1 : rest)
+  return $ concat qss ++ qsl ++ qsr
 backtickRules _ _ _ _ _ = return []
 
 -- Note [fold only]
