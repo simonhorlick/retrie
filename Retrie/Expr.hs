@@ -18,10 +18,14 @@ module Retrie.Expr
   , mkEpAnn
   , mkHsAppsTy
   , mkLams
+  , mkAnchor
   , mkLet
   , mkLoc
   , mkLocA
   , mkLocatedHsVar
+#if __GLASGOW_HASKELL__ >= 912
+  , mkParen'
+#endif
   , mkVarPat
   , mkTyVar
   , parenify
