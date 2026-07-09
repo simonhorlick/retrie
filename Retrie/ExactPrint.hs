@@ -468,17 +468,30 @@ transferAnnsT
   -> LocatedA a                 -- from
   -> LocatedA b                 -- to
   -> TransformT m (LocatedA b)
+-- When the source has matching anns they REPLACE the target's: callers
+-- pair this with 'transferEntryDP', whose 'combine' has already copied
+-- the source's whole 'AnnListItem' when both sides carry one, so
+-- appending would duplicate them (a hole with a trailing comma printed
+-- ",," after substitution). A target's own matching anns only survive
+-- when the source has none to transfer.
 #if __GLASGOW_HASKELL__ < 912
 transferAnnsT _ (L (SrcSpanAnn EpAnnNotUsed _) _) b = return b
 transferAnnsT p (L (SrcSpanAnn (EpAnn _ (AnnListItem ts) _) _) _) (L (SrcSpanAnn an lb) b) = do
   let ps = filter p ts
   let an' = case an of
         EpAnnNotUsed -> EpAnn (spanAsAnchor lb) (AnnListItem ps) emptyComments
-        EpAnn ancb (AnnListItem tsb) csb -> EpAnn ancb (AnnListItem (tsb++ps)) csb
+        EpAnn ancb (AnnListItem tsb) csb
+          | null ps -> EpAnn ancb (AnnListItem tsb) csb
+          | otherwise -> EpAnn ancb (AnnListItem (filter (not . p) tsb ++ ps)) csb
   return (L (SrcSpanAnn an' lb) b)
 #else
 transferAnnsT p (L (EpAnn _ (AnnListItem ts) _) _) (L (EpAnn ancb (AnnListItem tsb) csb) b) =
-  return $ L (EpAnn ancb (AnnListItem (tsb ++ filter p ts)) csb) b
+  return $ L (EpAnn ancb (AnnListItem tsb') csb) b
+  where
+    ps = filter p ts
+    tsb'
+      | null ps = tsb
+      | otherwise = filter (not . p) tsb ++ ps
 #endif
 
 
