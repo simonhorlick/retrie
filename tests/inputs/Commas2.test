@@ -1,0 +1,21 @@
+# Copyright (c) 2025 Andrew Farmer
+# Copyright (c) 2020-2024 Facebook, Inc. and its affiliates.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+#
+# A hole bound to a comma-trailing list element, substituted back into a
+# comma-trailing template position, must not print a duplicated comma.
+--adhoc "forall a b. f [a, b] = g [a, b]"
+===
+ module Commas2 where
+
+ main :: IO ()
+-main = print (f [succ 1, 2])
++main = print (g [succ 1, 2])
+
+ f :: [Int] -> [Int]
+ f = id
+
+ g :: [Int] -> [Int]
+ g = id
