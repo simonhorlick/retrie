@@ -154,6 +154,7 @@ test-suite test
     GroundTerms,
     Ignore,
     ParseQualified,
+    Replacements,
     Targets,
     Util
   hs-source-dirs: tests hse

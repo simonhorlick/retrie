@@ -88,7 +88,13 @@ replaceImpl c e = do
       -- prune the resulting expression and log it with location
       orig <- printNoLeadingSpaces <$> pruneA e
 
-      repl <- printNoLeadingSpaces <$> pruneA res
+      -- Zero the entry delta before printing: the replacement text is
+      -- spliced at the match site's start column, so its first line must
+      -- start at column one. Printing the entry whitespace and stripping
+      -- it afterwards (printNoLeadingSpaces) would shift the first line
+      -- left while later lines keep their columns, skewing a multi-line
+      -- replacement's internal layout by the amount stripped.
+      repl <- printNoLeadingSpaces <$> pruneA (setEntryDP res (SameLine 0))
       -- repl <- printA' <$> pruneA r
       -- repl <- printA' <$> pruneA res
       -- repl <- return $ showAst t'
