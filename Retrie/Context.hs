@@ -127,6 +127,11 @@ updateContext c i =
         bs = collectLStmtsBinders CollNoDictBinders gs
 
     updStmt :: Stmt GhcPs (LHsExpr GhcPs) -> Context
+    -- The body of a do-block statement sits where a leading 'let' would
+    -- be parsed as a let-statement, so mark it: 'parenify' parenthesizes
+    -- a spliced 'let ... in ...' there to keep it a single expression.
+    updStmt BodyStmt{} | i == firstChild = c { ctxtParentPrec = IsBodyStmt }
+    updStmt LastStmt{} | i == firstChild = c { ctxtParentPrec = IsBodyStmt }
     updStmt _ = neverParen
 
     updStmtList :: [LStmt GhcPs (LHsExpr GhcPs)] -> TransformT m Context
