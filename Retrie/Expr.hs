@@ -449,7 +449,7 @@ precedence _        _                = Nothing
 parenify
   :: Monad m => Context -> LHsExpr GhcPs -> TransformT m (LHsExpr GhcPs)
 parenify Context{..} le@(L _ e)
-  | needed ctxtParentPrec (precedence ctxtFixityEnv e) && needsParens e = do
+  | doParen = do
 #if __GLASGOW_HASKELL__ >= 912
      anc1 <- mkAnchor (SameLine 0)
      anc2 <- mkAnchor (SameLine 0)
@@ -471,8 +471,23 @@ parenify Context{..} le@(L _ e)
 #endif
       p1 > p2 || (p1 == p2 && (d1 /= d2 || d2 == InfixN))
     needed NeverParen _ = False
+    needed IsBodyStmt _ = False
     needed _ Nothing = True
     needed _ _ = False
+
+    doParen =
+      stmtParen
+        || (needed ctxtParentPrec (precedence ctxtFixityEnv e) && needsParens e)
+
+    -- A spliced 'let ... in ...' whose leading 'let' lands at a do-block
+    -- statement column is misparsed as a let-statement; parenthesize it so
+    -- it stays a single expression. Only 'let' is layout-ambiguous as a
+    -- statement head, so nothing else is wrapped on this account.
+    stmtParen = case ctxtParentPrec of
+      IsBodyStmt -> layoutAmbiguousStmt e
+      _          -> False
+    layoutAmbiguousStmt HsLet{} = True
+    layoutAmbiguousStmt _       = False
 
 getUnparened :: Data k => k -> k
 getUnparened = mkT unparen `extT` unparenT `extT` unparenP
@@ -585,6 +600,7 @@ parenifyT Context{..} lty@(L _ ty)
       HasPrec (Fixity prec InfixN) -> hsTypeNeedsParens (PprPrec prec) t
       HasPrec (Fixity prec _) -> hsTypeNeedsParens (PprPrec $ prec - 1) t
       IsLhs -> False
+      IsBodyStmt -> False
       NeverParen -> False
 #else
 parenifyT Context{..} lty@(L _ ty)
@@ -596,6 +612,7 @@ parenifyT Context{..} lty@(L _ ty)
       HasPrec (Fixity _ prec InfixN) -> hsTypeNeedsParens (PprPrec prec) t
       HasPrec (Fixity _ prec _) -> hsTypeNeedsParens (PprPrec $ prec - 1) t
       IsLhs -> False
+      IsBodyStmt -> False
       NeverParen -> False
 #endif
 

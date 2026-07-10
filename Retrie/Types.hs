@@ -92,6 +92,10 @@ data Context = Context
 data ParentPrec
   = HasPrec Fixity -- ^ Parent has precedence info.
   | IsLhs      -- ^ We are a pattern in a left-hand-side
+  | IsBodyStmt -- ^ We are the body expression of a do-block statement,
+               -- a layout position where a leading @let@ would be read as
+               -- a let-statement. A spliced @let ... in ...@ here is
+               -- parenthesized so it stays one expression.
   | NeverParen -- ^ Based on parent, we should never add parentheses.
 
 ------------------------------------------------------------------------
