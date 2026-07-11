@@ -381,7 +381,35 @@ addAllAnnsT a b = do
 #else
   :: (HasCallStack, Data a, Data b, Monad m, Typeable an)
   => LocatedAn an a -> LocatedAn an b -> TransformT m (LocatedAn an b)
-addAllAnnsT a b = return $ transferEntryDP a b
+addAllAnnsT a b = return $ transferEntryDPGraft a b
+
+-- | 'transferEntryDP', made comment-aware on the target side: when the
+-- graft target carries prior comments of its own (a spliced body whose
+-- first line is a @--@ comment) and the source has none, the source's
+-- entry delta must land on the first comment -- the first thing
+-- exact-print emits -- while the node keeps its own delta relative to
+-- the last comment. Overwriting the node's entry, as 'transferEntryDP'
+-- does, pulls the node onto the last comment's line, commenting it out.
+-- ('setEntryDP' treats its delta-anchor case the same way.)
+transferEntryDPGraft
+  :: (Typeable t1, Typeable t2)
+  => LocatedAn t1 a -> LocatedAn t2 b -> LocatedAn t2 b
+transferEntryDPGraft a@(L (EpAnn anc1 _ cs1) _) b@(L (EpAnn anc2 _ cs2) _)
+  | [] <- priorComments cs1
+  , EpaDelta _ dp1 [] <- anc1
+  , EpaDelta _ dp2 _ <- anc2
+  , c0 : rest <- priorComments cs2
+  = let L (EpAnn anc' an' cs') x = transferEntryDP a b
+        -- 'transferEntryDP' installed the source's entry on the node;
+        -- move it to the first comment and restore the node's own delta
+        anc'' = case anc' of
+          EpaDelta ss _ acs -> EpaDelta ss dp2 acs
+          _                 -> anc'
+        go (L (EpaDelta ss0 _ c0cs) c) = L (EpaDelta ss0 dp1 c0cs) c
+        go (L (EpaSpan ss0) c)         = L (EpaDelta ss0 dp1 NoComments) c
+        cs'' = setPriorComments cs' (go c0 : rest)
+    in L (EpAnn anc'' an' cs'') x
+transferEntryDPGraft a b = transferEntryDP a b
 #endif
 
 
