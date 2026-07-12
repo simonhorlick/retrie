@@ -4,6 +4,7 @@
 -- This source code is licensed under the MIT license found in the
 -- LICENSE file in the root directory of this source tree.
 --
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -79,7 +80,7 @@ replaceImpl c e = do
       -- graft template into target module
       t' <- graftA tTemplate
       -- substitute for quantifiers in grafted template
-      r <- subst sub c t'
+      r <- normalizeHangingLets <$> subst sub c t'
       -- copy appropriate annotations from old expression to template
       r0 <- addAllAnnsT e r
       -- add parens to template if needed
@@ -113,6 +114,44 @@ replaceImpl c e = do
       -- make the actual replacement
       return res
 
+-- | Re-lay every \"hanging\" let in the grafted expression: one whose
+-- bindings sit left of the @let@ keyword, so their column deltas are
+-- negative relative to it (@f x = let@ at the end of a line with the
+-- bindings and a dedented @in@ back at the equation's indentation).
+-- Those deltas underflow when the graft lands at a column left of the
+-- original keyword, printing the bindings at column zero and breaking
+-- the layout. The canonical form -- first binding beside the keyword,
+-- @in@ directly below it -- is valid at any column, so rewrite to that
+-- exactly when a negative column delta is present.
+normalizeHangingLets :: Data a => a -> a
+normalizeHangingLets = everywhere (mkT fixLet)
+  where
+    fixLet :: HsExpr GhcPs -> HsExpr GhcPs
+#if __GLASGOW_HASKELL__ >= 912
+    fixLet (HsLet (tkLet, tkIn) binds body) =
+      HsLet (tkLet, fixIn tkIn) (fixBinds binds) body
+    fixLet x = x
+
+    fixIn (EpTok (EpaDelta ss (DifferentLine n c) cs))
+      | c < 0 = EpTok (EpaDelta ss (DifferentLine n 0) cs)
+    fixIn t = t
+
+    fixBinds (HsValBinds (EpAnn (EpaDelta ss (DifferentLine _ c) acs) a cs) vb)
+      | c < 0 = HsValBinds (EpAnn (EpaDelta ss (SameLine 1) acs) a cs) vb
+    fixBinds b = b
+#else
+    fixLet (HsLet an tkLet binds tkIn body) =
+      HsLet an tkLet (fixBinds binds) (fixIn tkIn) body
+    fixLet x = x
+
+    fixIn (L (TokenLoc (EpaDelta (DifferentLine n c) cs)) tok)
+      | c < 0 = L (TokenLoc (EpaDelta (DifferentLine n 0) cs)) tok
+    fixIn t = t
+
+    fixBinds (HsValBinds (EpAnn (Anchor r (MovedAnchor (DifferentLine _ c))) a cs) vb)
+      | c < 0 = HsValBinds (EpAnn (Anchor r (MovedAnchor (SameLine 1))) a cs) vb
+    fixBinds b = b
+#endif
 
 -- | Records a replacement made. In cases where we cannot use ghc-exactprint
 -- to print the resulting AST (e.g. CPP modules), we fall back on splicing

@@ -1,0 +1,22 @@
+# Copyright (c) 2025 Andrew Farmer
+# Copyright (c) 2020-2024 Facebook, Inc. and its affiliates.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+#
+# A hanging let (keyword ending its line, bindings and 'in' dedented
+# left of it) must be re-laid when grafted at a column left of the
+# original keyword, not printed with its bindings at column zero.
+-u HangingLet.aConsiderablyLongName
+===
+ module HangingLet where
+
+ main :: IO ()
+-main = print aConsiderablyLongName
++main = print (let y = 5
++              in y + 1)
+
+ aConsiderablyLongName :: Int
+ aConsiderablyLongName = let
+   y = 5
+   in y + 1
