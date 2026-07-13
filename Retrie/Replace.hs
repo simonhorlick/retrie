@@ -80,7 +80,8 @@ replaceImpl c e = do
       -- graft template into target module
       t' <- graftA tTemplate
       -- substitute for quantifiers in grafted template
-      r <- normalizeHangingLets <$> subst sub c t'
+      r <- normalizeHangingLets . normalizeHangingComprehensions
+             <$> subst sub c t'
       -- copy appropriate annotations from old expression to template
       r0 <- addAllAnnsT e r
       -- add parens to template if needed
@@ -152,6 +153,39 @@ normalizeHangingLets = everywhere (mkT fixLet)
       | c < 0 = HsValBinds (EpAnn (Anchor r (MovedAnchor (SameLine 1))) a cs) vb
     fixBinds b = b
 #endif
+
+-- | Re-anchor comprehension lines that hang left of the head.
+--
+-- Brackets suspend GHC layout, so a parsed comprehension may carry
+-- continuation lines left of its own first token -- the layout anchor
+-- exact-print resolves their 'DifferentLine' columns against:
+--
+-- > gen = [ mk n s
+-- >     | n <- ns
+-- >     , let s = "!" ]
+--
+-- Those lines' column deltas are negative. Grafted where the head sits
+-- at a shallower column than the original, they underflow: the lines
+-- land at column zero, or left of an enclosing layout context, and the
+-- module no longer parses. Clamping each negative delta to the anchor
+-- itself is valid at any graft column, since the anchor is the
+-- comprehension's own first token, which always sits legally within
+-- the surrounding layout.
+normalizeHangingComprehensions :: Data a => a -> a
+normalizeHangingComprehensions = everywhere (mkT fixComp)
+  where
+    fixComp :: HsExpr GhcPs -> HsExpr GhcPs
+    fixComp e@(HsDo _ flav _)
+      | isComprehension flav = everywhere (mkT clamp) e
+    fixComp e = e
+
+    isComprehension ListComp  = True
+    isComprehension MonadComp = True
+    isComprehension _         = False
+
+    clamp :: DeltaPos -> DeltaPos
+    clamp (DifferentLine l c) | c < 0 = DifferentLine l 0
+    clamp d                           = d
 
 -- | Records a replacement made. In cases where we cannot use ghc-exactprint
 -- to print the resulting AST (e.g. CPP modules), we fall back on splicing
