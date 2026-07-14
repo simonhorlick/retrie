@@ -803,8 +803,7 @@ instance PatternMap PatMap where
         m { pmTuplePat = mAlter env vs b (toA (mAlter env vs ps f)) (pmTuplePat m) }
       go SigPat{} = missingSyntax "SigPat"
       go SumPat{} = missingSyntax "SumPat"
-#if __GLASGOW_HASKELL__ < 912
-#else
+#if __GLASGOW_HASKELL__ >= 912
       go OrPat{} = missingSyntax "OrPat"
       go EmbTyPat{} = missingSyntax "EmbTyPat"
       go InvisPat{} = missingSyntax "InvisPat"
