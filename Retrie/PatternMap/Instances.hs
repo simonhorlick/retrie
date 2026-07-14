@@ -428,8 +428,7 @@ instance PatternMap EMap where
       go HsUntypedSplice{} = missingSyntax "HsUntypedSplice"
       go HsProc{} = missingSyntax "HsProc"
       go HsStatic{} = missingSyntax "HsStatic"
-#if __GLASGOW_HASKELL__ < 912
-#else
+#if __GLASGOW_HASKELL__ >= 912
       go HsEmbTy{} = missingSyntax "HsEmbTy"
       go HsForAll{} = missingSyntax "HsForAll"
       go HsQual{} = missingSyntax "HsQual"
