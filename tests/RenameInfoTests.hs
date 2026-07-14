@@ -45,6 +45,7 @@ renameInfoTests :: LibDir -> Test
 renameInfoTests libdir = TestLabel "RenameInfo" $ TestList
   [ punLabelTest libdir
   , whereCaptureTest libdir
+  , recCaptureTest libdir
   ]
 
 -- | The renamer synthesizes a pun's right-hand side variable at the
@@ -136,6 +137,37 @@ whereCaptureTest libdir =
             assertEqual "splices a let carrying the where binding"
               ["let go y = y + 1\n      in go n"] (map replReplacement reps)
 
+-- | A @rec@ statement's binders must be visible to capture detection.
+-- Unfolding @use@ splices its template's free variable @boost@; at
+-- recSite a rec-bound @boost@ (a different Name) is in scope over the
+-- statement tail, so the match must be refused, while the unshadowed
+-- plainSite still unfolds. The rec binder reaches 'ctxtScopeNames'
+-- through 'resolvedStmtBinders' recursing into the compound
+-- statement's inner statements.
+recCaptureTest :: LibDir -> Test
+recCaptureTest libdir =
+  TestLabel "rec-bound binders shadow name-keyed unfolds" $
+    TestCase $
+      withFixture libdir $ \ri am -> do
+        let L _ m = astA am
+        (fid, fms) <- funBindOf "use" m
+        rewrites <- fmap astA $ transformA am $ \_ -> do
+          fe <- mkLocatedHsVar fid
+          concat <$>
+            forM (unLoc (mg_alts fms)) (matchToRewrites fe mempty LeftToRight)
+        (_, _, change) <-
+          runRetrie
+            (mkFixityEnv [])
+            (applyWithRenameInfo ri (map toURewrite rewrites))
+            (NoCPP am)
+        case change of
+          NoChange -> assertFailure "expected the plain site to unfold"
+          Change reps _ -> do
+            assertEqual "only the unshadowed site unfolds"
+              ["use 7"] (map replOriginal reps)
+            assertEqual "and it splices the top-level boost"
+              ["boost 7"] (map replReplacement reps)
+
 -- | The named function's binder and match group, from anywhere in the
 -- given AST.
 funBindOf
@@ -183,6 +215,7 @@ withFixture libdir k =
     -- at the call site.
     input = unlines
       [ "{-# LANGUAGE NamedFieldPuns #-}"
+      , "{-# LANGUAGE RecursiveDo #-}"
       , "module Points where"
       , ""
       , "data Point = Point { px :: Int, py :: Int }"
@@ -200,6 +233,20 @@ withFixture libdir k =
       , ""
       , "caller :: (Int -> Int) -> Int -> Int"
       , "caller go n = compute n"
+      , ""
+      , "boost :: Int -> Int"
+      , "boost v = v + 1"
+      , ""
+      , "use :: Int -> Int"
+      , "use x = boost x"
+      , ""
+      , "plainSite :: Int"
+      , "plainSite = use 7"
+      , ""
+      , "recSite :: IO Int"
+      , "recSite = do"
+      , "  rec boost <- pure (\\v -> v * (2 :: Int))"
+      , "  pure (use 5)"
       ]
 
 -- | Load and typecheck the fixture with the GHC API, returning its
