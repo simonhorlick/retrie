@@ -5,6 +5,7 @@
 -- LICENSE file in the root directory of this source tree.
 --
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE RecordWildCards #-}
 module Retrie.GHC
   ( module Retrie.GHC
@@ -179,3 +180,25 @@ getRealLoc _ = Nothing
 getRealSpan :: SrcSpan -> Maybe RealSrcSpan
 getRealSpan (RealSrcSpan s _) = Just s
 getRealSpan _ = Nothing
+
+-- | Extract @m_pats@ as a plain list, hiding the post-9.12 outer
+-- 'Located' wrapper.
+matchPats :: Match (GhcPass p) body -> [LPat (GhcPass p)]
+#if __GLASGOW_HASKELL__ < 912
+matchPats = m_pats
+#else
+matchPats = unLoc . m_pats
+#endif
+
+#if __GLASGOW_HASKELL__ < 912
+-- | Compat shim for the 'HasLoc' class 'GHC.Parser.Annotation' gained
+-- in GHC 9.10, covering the location types retrie uses it at.
+class HasLoc a where
+  getHasLoc :: a -> SrcSpan
+
+instance HasLoc (SrcSpanAnn' ann) where
+  getHasLoc = locA
+
+instance HasLoc (GenLocated SrcSpan e) where
+  getHasLoc = getLoc
+#endif
