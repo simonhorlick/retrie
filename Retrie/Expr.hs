@@ -414,7 +414,8 @@ conPatHelper con (InfixCon x y) =
                          <*> lift (mkLocatedHsVar con)
                          <*> patToExpr y
 #if __GLASGOW_HASKELL__ >= 914
-conPatHelper con (PrefixCon xs) = do
+conPatHelper con (PrefixCon xs0) = do
+  let xs = dropInvisPats xs0
 #else
 -- TODO(xich): Properly handle tyargs here!
 conPatHelper con (PrefixCon _tyargs xs) = do

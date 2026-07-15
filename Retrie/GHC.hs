@@ -94,6 +94,17 @@ tyvarRdrName :: HsType p -> Maybe (LIdP p)
 tyvarRdrName (HsTyVar _ _ n) = Just n
 tyvarRdrName _ = Nothing
 
+#if __GLASGOW_HASKELL__ >= 914
+-- On GHC >= 9.14 constructor-pattern type arguments are invisible
+-- patterns in the PrefixCon argument list rather than a separate tyargs
+-- field. Retrie ignores them, as it ignored the tyargs field on older GHCs.
+dropInvisPats :: [LPat GhcPs] -> [LPat GhcPs]
+dropInvisPats = filter (not . isInvis)
+  where
+    isInvis (L _ InvisPat{}) = True
+    isInvis _ = False
+#endif
+
 -- fixityDecls :: HsModule -> [(LIdP p, Fixity)]
 fixityDecls :: HsModule GhcPs -> [(LocatedN RdrName, Fixity)]
 fixityDecls m =
