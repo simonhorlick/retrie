@@ -58,6 +58,9 @@ import Language.Haskell.Syntax.Basic as GHC.Unit.Module.Name
 import GHC.Utils.Outputable (Outputable (ppr))
 
 import Data.Bifunctor (second)
+#if __GLASGOW_HASKELL__ >= 914
+import qualified Data.List.NonEmpty as NE
+#endif
 import Data.Maybe
 
 cLPat :: LPat (GhcPass p) -> LPat (GhcPass p)
@@ -103,6 +106,14 @@ dropInvisPats = filter (not . isInvis)
   where
     isInvis (L _ InvisPat{}) = True
     isInvis _ = False
+#endif
+
+-- On GHC >= 9.14 grhssGRHSs returns a NonEmpty rather than a list.
+grhssList :: GRHSs GhcPs body -> [LGRHS GhcPs body]
+#if __GLASGOW_HASKELL__ >= 914
+grhssList = NE.toList . grhssGRHSs
+#else
+grhssList = grhssGRHSs
 #endif
 
 -- fixityDecls :: HsModule -> [(LIdP p, Fixity)]

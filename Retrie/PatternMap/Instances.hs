@@ -21,9 +21,6 @@ module Retrie.PatternMap.Instances where
 
 import Control.Monad
 import Data.ByteString (ByteString)
-#if __GLASGOW_HASKELL__ >= 914
-import qualified Data.List.NonEmpty as NE
-#endif
 import Data.Maybe
 
 import Retrie.AlphaEnv
@@ -863,11 +860,7 @@ instance PatternMap GRHSSMap where
       env' = extendMatchEnv env bs
 
 grhssGRHSsList :: GRHSs GhcPs (LocatedA (HsExpr GhcPs)) -> [GRHS GhcPs (LocatedA (HsExpr GhcPs))]
-#if __GLASGOW_HASKELL__ >= 914
-grhssGRHSsList = map unLoc . NE.toList . grhssGRHSs
-#else
-grhssGRHSsList = map unLoc . grhssGRHSs
-#endif
+grhssGRHSsList = map unLoc . grhssList
 
 ------------------------------------------------------------------------
 

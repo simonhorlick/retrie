@@ -15,9 +15,6 @@ module Retrie.Rewrites.Function
 import Control.Monad
 import Control.Monad.State.Lazy
 import Data.List
-#if __GLASGOW_HASKELL__ >= 914
-import qualified Data.List.NonEmpty as NE
-#endif
 import Data.Maybe
 import Data.Traversable
 
@@ -112,12 +109,8 @@ makeFunctionQuery e imps dir grhss mkAppFn (argpats, bndpats)
   | any (not . irrefutablePat) bndpats = return []
   | otherwise = do
     let
-      GRHSs _ rhss lbs = grhss
-#if __GLASGOW_HASKELL__ >= 914
-      rhssList = NE.toList rhss
-#else
-      rhssList = rhss
-#endif
+      GRHSs _ _ lbs = grhss
+      rhssList = grhssList grhss
       bs = collectPatsBinders CollNoDictBinders argpats
     -- See Note [Wildcards]
     (es,(_,bs')) <- runStateT (mapM patToExpr argpats) (wildSupply bs, bs)
