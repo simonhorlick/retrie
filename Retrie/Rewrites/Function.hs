@@ -110,7 +110,9 @@ makeFunctionQuery e imps dir grhss mkAppFn (argpats, bndpats)
     -- lift $ debugPrint Loud "makeFunctionQuery:e="  [showAst e]
     lhs <- mkAppFn e es
     for rhssList $ \ grhs -> do
-      le <- mkLet lbs (grhsToExpr grhs)
+      -- The definition's where clause becomes the body of a let; strip
+      -- the where keyword annotation so it doesn't print inside it.
+      le <- mkLet (inlineLocalBinds lbs) (grhsToExpr grhs)
       rhs <- mkLams bndpats le
       let
         (pat, temp) =
