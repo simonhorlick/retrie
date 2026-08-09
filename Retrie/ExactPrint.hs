@@ -379,7 +379,37 @@ addAllAnnsT
   => LocatedAn an a -> LocatedAn an b -> TransformT m (LocatedAn an b)
 addAllAnnsT a b = do
   -- AZ: to start with, just transfer the entry DP from a to b
-  transferEntryDP a b
+  transferEntryDPGraft a b
+
+-- | 'transferEntryDP', made comment-aware on the target side: when the
+-- graft target carries prior comments of its own (a spliced body whose
+-- first line is a @--@ comment) and the source has none, the source's
+-- entry delta must land on the first comment -- the first thing
+-- exact-print emits -- while the node keeps its own delta relative to
+-- the last comment. Overwriting the node's entry, as 'transferEntryDP'
+-- does, pulls the node onto the last comment's line, commenting it out.
+-- ('setEntryDP' treats its 'MovedAnchor' case the same way.)
+transferEntryDPGraft
+  :: (Monoid an, Monad m, Typeable an)
+  => LocatedAn an a -> LocatedAn an b -> TransformT m (LocatedAn an b)
+transferEntryDPGraft a@(L (SrcSpanAnn (EpAnn anc1 _ cs1) _) _)
+                     b@(L (SrcSpanAnn (EpAnn anc2 _ cs2) _) _)
+  | [] <- priorComments cs1
+  , Anchor _ (MovedAnchor _) <- anc1
+  , Anchor _ (MovedAnchor dp2) <- anc2
+  , _ : _ <- priorComments cs2
+  = do
+      L (SrcSpanAnn epAnn l) x <- transferEntryDP a b
+      return $ case epAnn of
+        -- 'transferEntryDP' installed the source's entry on the node;
+        -- move it to the first comment and restore the node's own delta
+        EpAnn (Anchor r (MovedAnchor dp1)) an' cs'
+          | c0 : rest <- priorComments cs' ->
+            let go (L (Anchor rr _) c) = L (Anchor rr (MovedAnchor dp1)) c
+                cs'' = setPriorComments cs' (go c0 : rest)
+            in L (SrcSpanAnn (EpAnn (Anchor r (MovedAnchor dp2)) an' cs'') l) x
+        _ -> L (SrcSpanAnn epAnn l) x
+transferEntryDPGraft a b = transferEntryDP a b
 #else
   :: (HasCallStack, Data a, Data b, Monad m, Typeable an)
   => LocatedAn an a -> LocatedAn an b -> TransformT m (LocatedAn an b)
