@@ -1,0 +1,23 @@
+# A replacement that needs parenification, spliced where the matched
+# node carries a trailing separator: a tuple-type element owns the
+# comma that follows it (AnnListItem), and the spliced 'Maybe Int'
+# must be parenthesized in the element's appPrec context. Guards the
+# ordering in Retrie.Replace.replaceImpl: parenify must run before
+# addAllAnnsT so the call site's comma is transferred onto the
+# outermost (parenthesized) node. With the old order the comma was
+# stamped onto the inner node and then wrapped in a fresh HsParTy
+# whose own AnnListItem was empty, printing the separator inside the
+# parentheses: ((Maybe Int,) Bool).
+--type-forward CommaParens.MaybeInt
+===
+ module CommaParens where
+
+ type MaybeInt = Maybe Int
+
+-fst' :: (MaybeInt, Bool) -> MaybeInt
++fst' :: ((Maybe Int), Bool) -> Maybe Int
+ fst' (x, _) = x
+
+-snd' :: (Bool, MaybeInt) -> Bool
++snd' :: (Bool, (Maybe Int)) -> Bool
+ snd' (_, y) = y
