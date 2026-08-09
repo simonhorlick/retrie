@@ -1,0 +1,41 @@
+# Replacements spliced into a section operand or a record update's
+# head must be parenthesized according to precedence. Section operands
+# follow the same rule as the matching operand of an infix
+# application -- GHC accepts "(1 + 5 +)" but rejects "(+ 1 + 5)" and
+# "([1] ++ [2] ++)" -- and a record update's head must be atomic.
+# Before the fix these positions never got parens, producing
+# unparseable output.
+-u Parens2.foo
+-u Parens2.two
+-u Parens2.six
+-u Parens2.theR
+===
+ module Parens2 where
+
+ data R = R { a :: Int, b :: Int }
+   deriving Show
+
+ foo :: Int
+ foo = negate $ 1
+
+ two :: [Int]
+ two = [1] ++ [2]
+
+ six :: Int
+ six = 1 + 5
+
+ theR :: R
+ theR = let x = 1 in R x 2
+
+ main :: IO ()
+ main = do
+-  print $ map (foo :) [[0]]
++  print $ map ((negate $ 1) :) [[0]]
+-  print $ map (two ++) [[0]]
++  print $ map (([1] ++ [2]) ++) [[0]]
+-  print $ map (six +) [0]
++  print $ map (1 + 5 +) [0]
+-  print $ map (+ six) [0]
++  print $ map (+ (1 + 5)) [0]
+-  print $ theR { b = 3 }
++  print $ (let x = 1 in R x 2) { b = 3 }
