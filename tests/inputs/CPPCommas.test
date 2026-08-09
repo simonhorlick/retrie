@@ -1,0 +1,24 @@
+# This test enables CPP in order to exercise the replacement-text branch.
+# The printed text must not carry the call site's trailing list separator. In
+# replaceImpl the match occurs on the expression span not including the
+# trailing annotations so we must build the replacement without the trailing
+# annotations, otherwise a list element's replacement ends in "," and
+# duplicates the comma already present in the surrounding source.
+-u CPPCommas.foo
+===
+ {-# LANGUAGE CPP #-}
+ module CPPCommas where
+
+ #define TRUE 1
+
+ main :: IO ()
+-main = print [foo, pred foo, foo]
++main = print [succ 4, pred (succ 4), succ 4]
+
+ foo :: Int
+ foo = succ 4
+
+ #if TRUE
+ bar :: Int
+ bar = 0
+ #endif
