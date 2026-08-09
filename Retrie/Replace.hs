@@ -17,6 +17,7 @@ module Retrie.Replace
 import Control.Monad.Trans.Class
 import Control.Monad.Writer.Strict
 import Data.Char (isSpace)
+import Data.List (intercalate)
 import Data.Generics
 
 import Retrie.ExactPrint
@@ -90,7 +91,22 @@ replaceImpl c e = do
 
       -- build the replacement text without the annotations as 'getLocA'
       -- doesn't include them in the range
-      repl <- printNoLeadingSpaces <$> pruneA resForPrint
+      --
+      -- The replacement is spliced textually at the column of 'e', but
+      -- exactprint lays out the text for wherever the template sat in the
+      -- rewrite definition: lines anchored to the expression follow its
+      -- entry, delta-positioned lines print relative to the enclosing
+      -- layout column. Mimic printing at the destination by setting the
+      -- entry to the splice column's offset from the destination's layout
+      -- column ('ctxtLayoutCol') and padding the layout-relative lines out
+      -- to that column, which the standalone printer takes to be 1. (The
+      -- leading newline and indent the entry introduces are stripped by
+      -- 'printSpliceAt'.)
+      let layoutCol = ctxtLayoutCol c
+          spliceCol = maybe layoutCol srcSpanStartCol (getRealSpan (getLocA e))
+      repl <- printSpliceAt layoutCol <$>
+        pruneA (setEntryDP resForPrint
+          (DifferentLine 1 (max 0 (spliceCol - layoutCol))))
       -- repl <- printA' <$> pruneA r
       -- repl <- printA' <$> pruneA res
       -- repl <- return $ showAst t'
@@ -141,3 +157,18 @@ instance Monoid Change where
 -- drop leading spaces like this.
 printNoLeadingSpaces :: (Data k, ExactPrint k) => Annotated k -> String
 printNoLeadingSpaces = dropWhile isSpace . printA
+
+-- | Like 'printNoLeadingSpaces', but for text spliced into a layout group
+-- at the given column. The standalone printer lays out delta-positioned
+-- lines against layout column 1, so pad every line after the first by the
+-- difference. Lines anchored to the expression itself already sit at their
+-- destination columns, because the entry was set to the splice column's
+-- offset from the same layout column before printing.
+printSpliceAt :: (Data k, ExactPrint k) => Int -> Annotated k -> String
+printSpliceAt layoutCol a = case lines (printNoLeadingSpaces a) of
+  [] -> ""
+  l1 : rest -> intercalate "\n" (l1 : map pad rest)
+  where
+    pad ln
+      | all isSpace ln = ln -- keep blank lines blank
+      | otherwise = replicate (layoutCol - 1) ' ' ++ ln

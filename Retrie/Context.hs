@@ -55,8 +55,56 @@ updateContext c i =
     `extQ` updStmtList
     `extQ` (return . updHsBind)
     `extQ` (return . updTyClDecl)
+    `extQ` (return . updLExpr)
+    `extQ` (return . updLocalBinds)
+    `extQ` (return . updBinds)
   where
     neverParen = c { ctxtParentPrec = NeverParen }
+
+    -- Layout-group tracking ------------------------------------------
+    --
+    -- Wherever exactprint opens a layout context ('setLayoutBoth'),
+    -- rebind 'ctxtLayoutCol' to the group's column: 'Retrie.Replace'
+    -- lays out textually spliced replacements against it, the way
+    -- exactprint would when printing the whole module. The group's
+    -- column is that of its first item in source order, read off the
+    -- real spans of the target module; nodes without one (grafted
+    -- templates) leave the enclosing column in place.
+    --
+    -- Not tracked: arrow commands ('HsCmdDo', 'HsCmdLet', ...) and
+    -- signatures under a class or instance body, whose contents fall
+    -- back to the enclosing column.
+    atGroupCol :: Context -> [SrcSpan] -> Context
+    atGroupCol ctx sps =
+      case [ realSrcSpanStart ss | sp <- sps, Just ss <- [getRealSpan sp] ] of
+        [] -> ctx
+        locs -> ctx { ctxtLayoutCol = srcLocCol (minimum locs) }
+
+    -- The alternatives of a case, \case or \cases.
+    altsGroup :: MatchGroup GhcPs (LHsExpr GhcPs) -> Context
+    altsGroup MG{mg_alts = L _ alts} = atGroupCol neverParen (map getLocA alts)
+
+    updLExpr :: LHsExpr GhcPs -> Context
+    -- A let expression opens a layout context at the 'let' keyword (its
+    -- own first token) spanning both the binds and the body, so the
+    -- 'in' and body indent with it; the binds then tighten to their own
+    -- group's column via 'updLocalBinds' on the way down.
+    updLExpr le@(L _ HsLet{}) = atGroupCol c [getLocA le]
+    updLExpr _ = c
+
+    updLocalBinds :: HsLocalBinds GhcPs -> Context
+    -- The binds and signatures of a let or where group.
+    updLocalBinds (HsValBinds _ (ValBinds _ binds sigs)) =
+      atGroupCol c (map getLocA (hsBindsToList binds) ++ map getLocA sigs)
+    -- An implicit-parameter binds group (@let ?x = ...@).
+    updLocalBinds (HsIPBinds _ (IPBinds _ binds)) =
+      atGroupCol c (map getLocA binds)
+    updLocalBinds _ = c
+
+    updBinds :: LHsBinds GhcPs -> Context
+    -- A bare binds bag: the body of a class or instance declaration.
+    -- (The bag inside a 'ValBinds' is re-tightened to the same column.)
+    updBinds binds = atGroupCol c (map getLocA (hsBindsToList binds))
 
     updExp :: HsExpr GhcPs -> Context
     updType :: HsType GhcPs -> Context
@@ -100,6 +148,30 @@ updateContext c i =
       | i == firstChild = withPrec c 11 InfixN i
     updExp (HsLet _ lbs _) = addInScope neverParen $ collectLocalBinders CollNoDictBinders lbs
 #endif
+    -- The statements of a do or mdo block, and the qualifiers and body
+    -- of a comprehension, form a layout group; its column is the first
+    -- item's in source order (a comprehension's body is stored last but
+    -- printed first, which the minimum in 'atGroupCol' accounts for).
+    updExp (HsDo _ _ (L _ stmts)) = atGroupCol neverParen (map getLocA stmts)
+    -- The alternatives of a case form a layout group of their own; the
+    -- scrutinee (child 1) stays in the enclosing context.
+    updExp (HsCase _ _ mg) | i == 2 = altsGroup mg
+#if __GLASGOW_HASKELL__ < 912
+    -- \case and \cases (but not a plain lambda) open a layout context
+    -- for their alternatives, like a case expression does.
+    updExp (HsLamCase _ _ mg) | i == 2 = altsGroup mg
+#else
+    -- \case and \cases (but not a plain lambda) open a layout context
+    -- for their alternatives, like a case expression does.
+    updExp (HsLam _ variant mg)
+      | lamAlts variant, i == 2 = altsGroup mg
+      where
+        lamAlts LamSingle = False
+        lamAlts _ = True
+#endif
+    -- The guards of a multi-way if form a layout group.
+    updExp (HsMultiIf _ grhss) =
+      atGroupCol neverParen (map getLocA (altsToList grhss))
     updExp _ = neverParen
 
     updMatch :: Match GhcPs (LHsExpr GhcPs) -> Context
@@ -132,6 +204,9 @@ updateContext c i =
     -- a spliced 'let ... in ...' there to keep it a single expression.
     updStmt BodyStmt{} | i == firstChild = c { ctxtParentPrec = IsBodyStmt }
     updStmt LastStmt{} | i == firstChild = c { ctxtParentPrec = IsBodyStmt }
+    -- The statements of a @rec@ form a layout group of their own.
+    updStmt RecStmt{recS_stmts = L _ stmts} =
+      atGroupCol neverParen (map getLocA stmts)
     updStmt _ = neverParen
 
     updStmtList :: [LStmt GhcPs (LHsExpr GhcPs)] -> TransformT m Context
@@ -191,6 +266,7 @@ emptyContext ctxtFixityEnv ctxtRewriter ctxtDependents = Context{..}
   where
     ctxtBinders = []
     ctxtInScope = emptyAlphaEnv
+    ctxtLayoutCol = 1
     ctxtParentPrec = NeverParen
     ctxtSubst = Nothing
 

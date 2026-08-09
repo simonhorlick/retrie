@@ -64,6 +64,15 @@ import qualified Data.List.NonEmpty as NE
 #endif
 import Data.Maybe
 
+-- | The binds of a group as a list, across the 9.12 change of
+-- 'LHsBinds' from a 'Bag' to a plain list.
+hsBindsToList :: LHsBinds GhcPs -> [LHsBind GhcPs]
+#if __GLASGOW_HASKELL__ < 912
+hsBindsToList = bagToList
+#else
+hsBindsToList = id
+#endif
+
 cLPat :: LPat (GhcPass p) -> LPat (GhcPass p)
 cLPat = id
 
@@ -121,6 +130,16 @@ grhssList :: GRHSs GhcPs body -> [LGRHS GhcPs body]
 grhssList = grhssGRHSs
 #else
 grhssList = NE.toList . grhssGRHSs
+#endif
+
+-- | A guard-alternative list, as carried by 'HsMultiIf', as a plain
+-- list across the 9.14 change to 'NonEmpty'.
+#if __GLASGOW_HASKELL__ < 914
+altsToList :: [a] -> [a]
+altsToList = id
+#else
+altsToList :: NE.NonEmpty a -> [a]
+altsToList = NE.toList
 #endif
 
 -- fixityDecls :: HsModule -> [(LIdP p, Fixity)]

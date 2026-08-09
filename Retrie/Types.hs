@@ -78,6 +78,11 @@ data Context = Context
     -- ^ Current FixityEnv.
   , ctxtInScope :: AlphaEnv
     -- ^ In-scope local bindings. Used to detect shadowing.
+  , ctxtLayoutCol :: Int
+    -- ^ Column of the innermost enclosing layout group (1 at the top
+    -- level). A textually spliced replacement must lay out its
+    -- delta-positioned lines against this column, the way exactprint
+    -- would when printing the whole module.
   , ctxtParentPrec :: ParentPrec
     -- ^ Precedence of parent
     -- (app = HasPrec 10, infix op = HasPrec $ op precedence)
