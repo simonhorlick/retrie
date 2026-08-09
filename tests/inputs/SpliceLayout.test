@@ -1,0 +1,103 @@
+# A replacement that starts with a comment must have its first non-comment token
+# indented correctly relative to the current layout context column. CPP forces
+# the text-based splice path.
+-u SpliceLayout.kx
+===
+ {-# LANGUAGE CPP #-}
+ {-# LANGUAGE ImplicitParams #-}
+ {-# LANGUAGE LambdaCase #-}
+ {-# LANGUAGE MultiWayIf #-}
+ {-# LANGUAGE RecursiveDo #-}
+ module SpliceLayout where
+
+ #define KEEP 1
+
+ kx :: Int -> Maybe Int
+ kx n =
+ -- c
+  Just 2
+
+ caseAlt = case True of
+-  True -> kx 2
++  True -> -- c
++   Just 2
+   False -> Nothing
+
+ class C a where
+   cm :: a -> Maybe Int
+-  cm _ = kx 2
++  cm _ = -- c
++   Just 2
+
+ instance C Int where
+-  cm _ = kx 2
++  cm _ = -- c
++   Just 2
+
+-ipBind = let ?p = kx 2
++ipBind = let ?p = -- c
++              Just 2
+          in ?p
+
+ lamCase = \case
+-  True -> kx 2
++  True -> -- c
++   Just 2
+   False -> Nothing
+
+ lamCases = \cases
+-  True _ -> kx 2
++  True _ -> -- c
++   Just 2
+   False _ -> Nothing
+
+-letBinds = let q = kx 2
++letBinds = let q = -- c
++                Just 2
+                r = q
+            in r
+
+ letBody = let q = 1
+-          in kx 2
++          in -- c
++           Just 2
+
+ letStmt = do
+-  let q = kx 2
++  let q = -- c
++       Just 2
+       r = q
+   q
+
+ listComp = [ r
+-           | let q = kx 2
++           | let q = -- c
++                  Just 2
+                  r = q
+            ]
+
+ mdoStmt = mdo
+-  q <- kx 2
++  q <- -- c
++   Just 2
+   pure q
+
+ multiWayIf = if
+-  | True -> kx 2
++  | True -> -- c
++   Just 2
+   | otherwise -> Nothing
+
+ recStmt = do
+-  rec q <- kx 2
++  rec q <- -- c
++       Just 2
+       r <- pure q
+   pure q
+
+ whereClause = q
+   where
+-    q = kx 2
++    q = -- c
++     Just 2
+     r = q
