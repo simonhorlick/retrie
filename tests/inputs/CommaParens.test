@@ -1,0 +1,15 @@
+# Parenify must run before addAllAnnsT so the call site's comma is transferred
+# onto the parenthesized node.
+--type-forward CommaParens.MaybeInt
+===
+ module CommaParens where
+
+ type MaybeInt = Maybe Int
+
+-fst' :: (MaybeInt, Bool) -> MaybeInt
++fst' :: ((Maybe Int), Bool) -> Maybe Int
+ fst' (x, _) = x
+
+-snd' :: (Bool, MaybeInt) -> Bool
++snd' :: (Bool, (Maybe Int)) -> Bool
+ snd' (_, y) = y
