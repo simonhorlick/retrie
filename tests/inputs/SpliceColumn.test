@@ -1,0 +1,23 @@
+# When the call site sits at a different column than the template (here col 5
+# vs col 3), the spliced continuation lines use the template's columns,
+# breaking the layout. This test requires CPP in order to exercise the
+# text-based code branch.
+-u SpliceColumn.mk
+===
+ {-# LANGUAGE CPP #-}
+ module SpliceColumn where
+
+ #if 1
+ mk :: Int -> IO Int
+ mk x =
+   let a = x + 1
+       b = x + 2
+   in pure (a + b)
+ #endif
+
+ g :: IO Int
+ g =
+-    mk 4
++    let a = 4 + 1
++        b = 4 + 2
++    in pure (a + b)
