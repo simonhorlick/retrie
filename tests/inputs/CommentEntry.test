@@ -1,0 +1,14 @@
+# Unfolding a definition whose body begins with a comment must not pull
+# the spliced expression onto the comment line, which comments it out
+# and leaves the equation without a right-hand side.
+-u CommentEntry.foo
+===
+ module CommentEntry where
+
+ foo x =
+   -- add one to x
+   x + 1
+
+-useFoo = foo 2
++useFoo = -- add one to x
++  2 + 1
