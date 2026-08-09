@@ -1,0 +1,60 @@
+# Unfolding a definition with a where clause turns the clause into a
+# let wrapping the spliced body.
+-u WhereToLet.plain
+-u WhereToLet.sig
+-u WhereToLet.inArg
+-u WhereToLet.subst
+-u WhereToLet.partial
+===
+ module WhereToLet where
+
+ plain x = addOne x
+   where
+     addOne y = y + 1
+
+-usePlain x = plain x
++usePlain x = let
++                 addOne y = y + 1
++                   in addOne x
+
+ sig x = addOne x
+   where
+     addOne :: Int -> Int
+     addOne y = y + 1
+
+-useSig x = sig x
++useSig x = let
++               addOne :: Int -> Int
++               addOne y = y + 1
++                 in addOne x
+
+ data E = E { a :: Int }
+
+ inArg x = E { a = five }
+   where five = 5
+
+ g :: E -> Int
+ g _ = 1
+
+-useInArg = g (inArg 1)
++useInArg = g (let five = 5
++                    in E { a = five })
+
+ subst x = y
+   where
+     y = x + 1
+
+-useSubst = subst 1
++useSubst = let
++               y = 1 + 1
++                 in y
+
+ partial :: Int -> Int
+ partial x = x * two
+   where
+     two = 2
+
+-usePartial = map partial [1, 2, 3]
++usePartial = map (\ x -> let
++                             two = 2
++                               in x * two) [1, 2, 3]
