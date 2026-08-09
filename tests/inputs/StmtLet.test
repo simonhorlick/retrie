@@ -1,0 +1,18 @@
+# Unfolding a function whose body is a 'let ... in ...' into a do-block
+# parenthesizes the body, so its leading 'let' is not misparsed as a
+# let-statement.
+-u StmtLet.f
+===
+ module StmtLet where
+
+ f :: Int -> IO Int
+ f x =
+  let y = 5
+  in pure y
+
+ g :: IO Int
+ g = do
+   putStrLn "hi"
+-  f 5
++  (let y = 5
++   in pure y)
