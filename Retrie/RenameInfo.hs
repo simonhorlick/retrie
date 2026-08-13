@@ -183,31 +183,71 @@ mkRenameInfo (grp, _imports, _exports, _docs, _modName) =
     , riNameMap = Map.fromList nameEntries
     }
   where
-    nameEntries =
-      everything (++)
-        (mkQ [] hsVarName `extQ` varPatName `extQ` funBindName) grp
-    -- Record the renamer's 'Name' at every variable reference site.
-    -- The key is the 'RealSrcSpan' of the 'LIdP', which is preserved
-    -- through renaming so a parser-pass 'LIdP' at the same position
-    -- gets the same key.
-    hsVarName :: LHsExpr GhcRn -> [(RealSrcSpan, Name)]
-    hsVarName (L _ (HsVar _ lident))
-      | Just sp <- getRealSpan (getLocA lident)
-        = [(sp, identNameRn lident)]
-    -- A field-selector occurrence renames to an 'XExpr' extension node
-    -- rather than an 'HsVar'. Record it too: a rewrite template that
-    -- references a selector can have that reference captured by a
-    -- call-site binder of the same occurrence string (e.g. a
-    -- NamedFieldPuns pattern binder), and capture detection resolves
-    -- the template's references through this map.
+    -- Record the renamer's 'Name' at every located name the renamed
+    -- source carries: variable references and binders, constructors
+    -- in expression and pattern position, record-field labels, and
+    -- type-level names. The key is the located name's 'RealSrcSpan',
+    -- which is preserved through renaming so a parser-pass name at
+    -- the same position gets the same key. Collection is generic so
+    -- this map stays in step with equally generic 'RdrName' walks
+    -- consumers run over rewrite templates (e.g. HLS's inline import
+    -- resolution): an occurrence this map missed would refuse the
+    -- match there.
+    nameEntries = occurrenceEntries ++ binderEntries
+
 #if __GLASGOW_HASKELL__ < 912
-    hsVarName (L _ (HsRecSel _ fo))
+    occurrenceEntries =
+      everything (++)
+        (mkQ [] locName `extQ` rnFieldOcc `extQ` rnUpdFieldOcc) grp
+
+    -- Before GHC 9.12, record-update labels are 'AmbiguousFieldOcc's
+    -- locating the 'RdrName', with the resolved 'Name' (when the
+    -- renamer found one) in the extension field where the generic
+    -- walk cannot see it. An update the renamer left ambiguous has
+    -- no 'Name' to record, so a template carrying one refuses -- the
+    -- safe direction.
+    rnUpdFieldOcc :: AmbiguousFieldOcc GhcRn -> [(RealSrcSpan, Name)]
+    rnUpdFieldOcc (Unambiguous n lrdr)
+      | Just sp <- getRealSpan (getLocA lrdr) = [(sp, n)]
+    rnUpdFieldOcc _ = []
+#elif __GLASGOW_HASKELL__ < 913
+    occurrenceEntries =
+      everything (++) (mkQ [] locName `extQ` rnFieldOcc) grp
 #else
-    hsVarName (L _ (XExpr (HsRecSelRn fo)))
+    occurrenceEntries =
+      everything (++)
+        (mkQ [] locName `extQ` rnFieldOcc `extQ` locUserRdrName) grp
+
+    -- GHC 9.14 wraps occurrence positions in 'WithUserRdr'; binder
+    -- positions still carry a bare located 'Name'.
+    locUserRdrName :: LocatedN (WithUserRdr Name) -> [(RealSrcSpan, Name)]
+    locUserRdrName ln
+      | Just sp <- getRealSpan (getLocA ln) = [(sp, unLocWithUserRdr ln)]
+      | otherwise = []
 #endif
-      | Just sp <- getRealSpan (getLocA (foLabel fo))
-        = [(sp, foName fo)]
-    hsVarName _ = []
+
+    locName :: LocatedN Name -> [(RealSrcSpan, Name)]
+    locName ln
+      | Just sp <- getRealSpan (getLocA ln) = [(sp, unLoc ln)]
+      | otherwise = []
+
+    -- A field-selector occurrence or record-field label; 'foLabel'
+    -- locates it on every version. Before GHC 9.12 the 'Name' lives
+    -- in 'foExt' where the generic walk cannot see it; on later
+    -- versions this merely duplicates a 'locName' entry.
+    rnFieldOcc :: FieldOcc GhcRn -> [(RealSrcSpan, Name)]
+    rnFieldOcc fo
+      | Just sp <- getRealSpan (getLocA (foLabel fo)) = [(sp, foName fo)]
+      | otherwise = []
+
+    -- Binders are collected by the generic walk too; these explicit
+    -- entries are appended so they win 'Map.fromList''s
+    -- last-entry-per-key rule on span collisions: a record pun's
+    -- synthesized 'VarPat' binder shares its span with the field
+    -- label it was expanded from, and that span must keep resolving
+    -- to the binder.
+    binderEntries =
+      everything (++) (mkQ [] varPatName `extQ` funBindName) grp
 
     varPatName :: LPat GhcRn -> [(RealSrcSpan, Name)]
     varPatName (L _ (VarPat _ ln))
@@ -281,17 +321,6 @@ foName :: FieldOcc GhcRn -> Name
 foName = foExt
 #else
 foName = unLoc . foLabel
-#endif
-
--- | Extract the @Name@ from an @LIdP GhcRn@ on the rename pass. GHC
--- 9.14 changed the payload to a @WithUserRdr Name@; earlier versions
--- carried a bare @Name@.
-#if __GLASGOW_HASKELL__ < 913
-identNameRn :: GenLocated l Name -> Name
-identNameRn = unLoc
-#else
-identNameRn :: GenLocated l (WithUserRdr Name) -> Name
-identNameRn = unLocWithUserRdr
 #endif
 
 -- | Convert a 'Name' to a local 'RdrName'. Retrie compares scope
